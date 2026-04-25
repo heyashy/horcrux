@@ -10,7 +10,12 @@ from pydantic import ValidationError
 from pydantic_ai.models.test import TestModel
 
 from horcrux import agents
-from horcrux.agents import _format_context, synthesise
+from horcrux.agents import (
+    _CHAPTER_SNIPPET_WORDS,
+    _format_context,
+    _truncate_for_synthesis,
+    synthesise,
+)
 from horcrux.models import Finding, ScoredCandidate
 
 pytestmark = pytest.mark.unit
@@ -51,6 +56,50 @@ def test_finding_rejects_conviction_below_1():
 def test_finding_gaps_default_empty():
     f = Finding(answer="x", source_ids=["a"], conviction=3)
     assert f.gaps == []
+
+
+# ── _truncate_for_synthesis ──────────────────────────────────────
+
+
+def test_truncate_paragraph_passes_through():
+    """Paragraph chunks carry the evidence — never truncate them."""
+    long_text = " ".join(["word"] * 10_000)
+    cand = _candidate(text=long_text)  # default source = paragraph
+    assert _truncate_for_synthesis(cand) == long_text
+
+
+def test_truncate_chapter_caps_at_snippet_words():
+    """Chapter chunks store the whole chapter (3-5k tokens). Cap them so a
+    top-10 candidate set fits under the per-call rate limit."""
+    long_text = " ".join(["word"] * 10_000)
+    cand = ScoredCandidate(
+        id="c",
+        score=0.5,
+        source="chapter",
+        text=long_text,
+        book_num=1,
+        chapter_num=1,
+        chapter_title="t",
+        page_start=1,
+        characters=[],
+    )
+    out = _truncate_for_synthesis(cand)
+    out_words = out.split()
+    # _CHAPTER_SNIPPET_WORDS body + 2-word continuation marker
+    # ("[…chapter" + "continues…]").
+    assert len(out_words) == _CHAPTER_SNIPPET_WORDS + 2
+    assert out.endswith("[…chapter continues…]")
+
+
+def test_truncate_chapter_short_passes_through():
+    """A chapter chunk under the cap shouldn't get a truncation marker."""
+    short = "this chapter is only a handful of words"
+    cand = ScoredCandidate(
+        id="c", score=0.5, source="chapter", text=short,
+        book_num=1, chapter_num=1, chapter_title="t",
+        page_start=1, characters=[],
+    )
+    assert _truncate_for_synthesis(cand) == short
 
 
 # ── _format_context ──────────────────────────────────────────────

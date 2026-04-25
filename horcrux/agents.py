@@ -120,11 +120,40 @@ def _synthesis_agent() -> Agent[None, Finding]:
     return Agent(model, output_type=Finding, system_prompt=_SYSTEM_PROMPT)
 
 
+# Chapter chunks store the full chapter text (3-5k tokens each); a top-10
+# candidate set with a few chapter hits trivially blows past Anthropic's
+# default 30k input-tokens-per-minute rate limit. The chapter chunks are
+# in the candidate set for *topic / breadth* signal, not for fine-grained
+# evidence — paragraph chunks carry the evidence. Cap chapter snippets
+# at this many words; paragraph chunks pass through whole. Tuned so a
+# top-10 candidate set fits comfortably under the per-call budget.
+_CHAPTER_SNIPPET_WORDS = 200
+
+
+def _truncate_for_synthesis(candidate: ScoredCandidate) -> str:
+    """Trim chapter chunks to a head snippet; paragraphs pass through.
+
+    The synthesis agent only ever needs paragraph-level chunks for
+    citation. Chapter chunks are useful for "what's the topic of B4
+    chapter 23?" routing and for RRF score reinforcement when they
+    overlap with paragraph hits — neither requires the chapter's full
+    text in-prompt.
+    """
+    if candidate.source != "chapter":
+        return candidate.text
+    words = candidate.text.split()
+    if len(words) <= _CHAPTER_SNIPPET_WORDS:
+        return candidate.text
+    return " ".join(words[:_CHAPTER_SNIPPET_WORDS]) + " […chapter continues…]"
+
+
 def _format_context(candidates: list[ScoredCandidate]) -> str:
     """Render candidates as a numbered context block for the agent.
 
     Each entry includes the ID (so the model can cite it), location
     (book/chapter/title/page for human-readable trace), and the text.
+    Chapter-source chunks are truncated to a head snippet; paragraph
+    chunks pass through whole. See `_truncate_for_synthesis`.
     """
     lines = []
     for i, c in enumerate(candidates, start=1):
@@ -132,7 +161,7 @@ def _format_context(candidates: list[ScoredCandidate]) -> str:
             f"[{i}] id={c.id}\n"
             f"    Book {c.book_num}, Chapter {c.chapter_num}: {c.chapter_title} "
             f"(p.{c.page_start}, source={c.source})\n"
-            f"    {c.text}"
+            f"    {_truncate_for_synthesis(c)}"
         )
     return "\n\n".join(lines)
 
