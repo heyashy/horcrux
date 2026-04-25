@@ -63,7 +63,7 @@ Phase-by-phase walkthrough: [`docs/lab/toolchain-path.md`](docs/lab/toolchain-pa
 | **PydanticAI** | Typed boundary at every LLM call | Schema-as-contract; automatic validation retry on bad model output. |
 | **LangGraph** | Query-pipeline orchestration | Conditional routing, parallel retrieval, human-in-the-loop interrupts. |
 | **Temporal** | Durable ingest | Crash mid-OCR, restart, resume from last completed batch — proven by deliberate kill test. |
-| **Qdrant** | Vector storage | Two collections at different granularities; payload-filtered ANN search. |
+| **Qdrant** | Vector storage | Two collections at different granularities; payload-filtered ANN search. (For production with existing OpenSearch / Elasticsearch, see [ADR-0008](docs/adr/pending/ADR-0008-qdrant-for-the-lab-opensearch-for-production.md) — Qdrant is the lab's choice, not a universal recommendation.) |
 | **LiteLLM** | Model router | Provider-agnostic; swap models by editing one YAML line; spend tracking. |
 | **LangSmith** | Observability | Full graph trace per query; visualises the conditional routing as a tree. |
 

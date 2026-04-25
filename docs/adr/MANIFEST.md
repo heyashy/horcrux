@@ -9,3 +9,4 @@
 | ADR-0005 | PDF outline as the chapter source of truth                           | pending | 2026-04-25 |
 | ADR-0006 | Three-tier character discovery (NER + fuzzy + coref + LLM + manual)  | pending | 2026-04-25 |
 | ADR-0007 | Temporal-forward OCR pipeline                                        | pending | 2026-04-25 |
+| ADR-0008 | Qdrant for the lab, OpenSearch for production                        | pending | 2026-04-25 |
