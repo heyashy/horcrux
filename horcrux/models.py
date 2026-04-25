@@ -7,7 +7,6 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-
 # ── Phase 1 — OCR ────────────────────────────────────────────────
 
 class RawPage(BaseModel):
@@ -64,6 +63,31 @@ class ChapterChunk(BaseModel):
     chunk_type: Literal["chapter", "paragraph"]
     characters: list[str] = Field(default_factory=list)
     page_start: int = Field(ge=1)
+
+
+# ── Phase 4 — retrieval ──────────────────────────────────────────
+
+class ScoredCandidate(BaseModel):
+    """A retrieval hit returned by search.
+
+    `score` is whatever the source put in the slot — cosine similarity for
+    a single-collection ANN search, RRF score for a fused list. Don't compare
+    scores across sources without normalising; do compare *ranks*.
+
+    `source` records which collection produced the hit (for explanations and
+    for letting the synthesis agent reason over breadth-vs-precision). The
+    rest of the fields are payload pulled straight from Qdrant.
+    """
+
+    id: str
+    score: float
+    source: Literal["chapter", "paragraph"]
+    text: str
+    book_num: int = Field(ge=1)
+    chapter_num: int = Field(ge=1)
+    chapter_title: str
+    page_start: int = Field(ge=1)
+    characters: list[str] = Field(default_factory=list)
 
 
 # ── Helpers ──────────────────────────────────────────────────────
