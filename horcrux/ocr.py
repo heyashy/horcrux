@@ -36,6 +36,7 @@ def ocr_pages(
     start_page: int = 1,
     end_page: int | None = None,
     zoom: float = 2.0,
+    show_progress: bool = True,
 ) -> list[RawPage]:
     """Render and OCR a contiguous page range from the PDF.
 
@@ -44,6 +45,8 @@ def ocr_pages(
         start_page: 1-indexed inclusive start page.
         end_page: 1-indexed inclusive end page. None = last page in PDF.
         zoom: render zoom factor. 2.0 ≈ 144 DPI (recommended).
+        show_progress: render a Rich progress bar. Set False inside Temporal
+            activities — concurrent activities clobber each other's bars.
 
     Returns:
         One RawPage per page in the range, in order.
@@ -70,24 +73,32 @@ def ocr_pages(
             start_page, end_page, total_in_pdf, pdf_path,
         )
 
-        progress_columns = [
-            TextColumn("[progress.description]{task.description}"),
-            BarColumn(),
-            TaskProgressColumn(),
-            TextColumn("•"),
-            TimeElapsedColumn(),
-            TextColumn("•"),
-            TimeRemainingColumn(),
-        ]
-
-        with Progress(*progress_columns) as progress:
+        progress: Progress | None = None
+        task = None
+        if show_progress:
+            progress = Progress(
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                TaskProgressColumn(),
+                TextColumn("•"),
+                TimeElapsedColumn(),
+                TextColumn("•"),
+                TimeRemainingColumn(),
+            )
+            progress.start()
             task = progress.add_task("OCR", total=end_page - start_page + 1)
+
+        try:
             for page_idx in range(start_page - 1, end_page):  # 0-indexed for pymupdf
                 page = doc[page_idx]
                 pix = page.get_pixmap(matrix=matrix)
                 image = Image.open(io.BytesIO(pix.tobytes("png")))
                 text = pytesseract.image_to_string(image)
                 pages.append(RawPage(page_num=page_idx + 1, text=text))
-                progress.advance(task)
+                if progress is not None and task is not None:
+                    progress.advance(task)
+        finally:
+            if progress is not None:
+                progress.stop()
 
     return pages

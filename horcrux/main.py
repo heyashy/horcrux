@@ -1,15 +1,18 @@
 """CLI entrypoint for Horcrux.
 
-Subcommands grow phase by phase. Phase 1 ships `ocr` only.
+Subcommands grow phase by phase.
 
     uv run python -m horcrux.main ocr --start 1 --end 520
+    uv run python -m horcrux.main ingest        # full corpus via Temporal
 """
 
 import argparse
+import asyncio
 import json
 import logging
 import sys
 from pathlib import Path
+from uuid import uuid4
 
 from rich.console import Console
 from rich.logging import RichHandler
@@ -61,12 +64,43 @@ def cmd_ocr(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_ingest(args: argparse.Namespace) -> int:
+    """Trigger the IngestOCRWorkflow on the Temporal dev server.
+
+    Blocks until the workflow completes; prints the merged artefact path.
+    """
+    pdf_path = args.pdf or settings.corpus_path
+
+    async def _run() -> int:
+        from temporalio.client import Client
+
+        client = await Client.connect(
+            settings.temporal.address,
+            namespace=settings.temporal.namespace,
+        )
+        workflow_id = f"ingest-ocr-{uuid4().hex[:8]}"
+        console.print(f"[bold]starting workflow[/]  id={workflow_id}")
+        console.print(
+            f"watch in UI: [link]http://localhost:8233/namespaces/{settings.temporal.namespace}/workflows/{workflow_id}[/link]"
+        )
+        result = await client.execute_workflow(
+            "IngestOCRWorkflow",
+            pdf_path,
+            id=workflow_id,
+            task_queue=settings.temporal.task_queue,
+        )
+        console.print(f"[green]done[/]  merged → {result}")
+        return 0
+
+    return asyncio.run(_run())
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="horcrux", description="Deep research over a literary corpus.")
     parser.add_argument("--verbose", "-v", action="store_true", help="DEBUG-level logging")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    ocr = sub.add_parser("ocr", help="OCR a page range from the corpus PDF")
+    ocr = sub.add_parser("ocr", help="OCR a page range from the corpus PDF (single-threaded, no Temporal)")
     ocr.add_argument("--pdf", help=f"PDF path (default: {settings.corpus_path})")
     ocr.add_argument("--start", type=int, default=1, help="1-indexed start page (inclusive)")
     ocr.add_argument("--end", type=int, default=None, help="1-indexed end page (inclusive); default = last")
@@ -76,6 +110,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     ocr.add_argument("--force", action="store_true", help="overwrite existing output")
     ocr.set_defaults(func=cmd_ocr)
+
+    ingest = sub.add_parser(
+        "ingest",
+        help="Run the full-corpus OCR pipeline as a Temporal workflow (durable, parallel)",
+    )
+    ingest.add_argument("--pdf", help=f"PDF path (default: {settings.corpus_path})")
+    ingest.set_defaults(func=cmd_ingest)
 
     return parser
 
