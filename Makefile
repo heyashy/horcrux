@@ -3,7 +3,7 @@
 # profile (~/.zshrc / ~/.bashrc) has been sourced in this session.
 export PATH := $(HOME)/.temporalio/bin:$(HOME)/.local/bin:$(PATH)
 
-.PHONY: help preflight local temporal proxy worker run ingest chapters doctor test integration-test smoke lint format
+.PHONY: help preflight local temporal proxy worker run ingest chapters chunks embed doctor test integration-test smoke lint format
 
 # Default target — print available commands.
 help:
@@ -21,6 +21,8 @@ help:
 	@echo "    make worker            Start the Temporal worker (foreground)"
 	@echo "    make ingest            Trigger the OCR ingest workflow (full corpus)"
 	@echo "    make chapters          Derive chapters.json from raw_pages.json (silver tier)"
+	@echo "    make chunks            Derive chunks.json from chapters + alias dict (gold tier)"
+	@echo "    make embed             Embed chunks and upsert into Qdrant (requires \`make local\`)"
 	@echo "    make run Q=\"query\"     Run a single query end-to-end"
 	@echo ""
 	@echo "  Diagnostics & quality:"
@@ -83,6 +85,12 @@ ingest:
 
 chapters:
 	uv run python scripts/build_chapters.py
+
+chunks:
+	uv run python scripts/build_chunks.py
+
+embed:
+	uv run python scripts/build_embeddings.py
 
 run:
 	@if [ -z "$(Q)" ]; then \

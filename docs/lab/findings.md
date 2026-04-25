@@ -673,6 +673,153 @@ the chunk payloads.
 
 ---
 
+## Finding 16 — Synthetic test fixtures must match the real distribution
+
+**Symptom.** A unit test for `chunk_chapter_text` used synthetic text
+of the form `"Word " * 30 + "this is sentence A."` repeated four times,
+expecting spaCy's sentencizer to find four sentences. It found one. The
+test fixture was too unrealistic for the rule-based sentencizer to
+parse correctly.
+
+While debugging, I caught a separate real bug: `current[-0:]` in Python
+returns the whole list, not an empty slice — so `overlap_sentences=0`
+was *appending* the next sentence to the existing chunk instead of
+resetting. The unit test wouldn't have caught this with the broken
+fixture either, since it never reached the cut path.
+
+**Root cause.**
+1. spaCy's `sentencizer` pipe is rule-based, tuned for prose patterns
+   (subject-verb-object structure, varying token shapes, real
+   punctuation). A repeating-token pattern doesn't trigger its
+   boundary rules even when the punctuation is correct.
+2. `lst[-0:]` is a known Python negative-indexing edge case: `0` and
+   `-0` are the same integer, so the slice becomes `lst[0:]` — the
+   whole list — not an empty slice as the negative-index intuition
+   suggests.
+
+**Fix.**
+1. Test fixture changed to prose-shaped sentences with subject-verb-
+   object structure. spaCy now finds the four sentences correctly.
+2. Production code: explicit guard:
+   ```python
+   overlap = current[-overlap_sentences:] if overlap_sentences > 0 else []
+   ```
+
+**Lesson.** *Synthetic fixtures must match the real distribution your
+code will process.* If your code uses an ML model trained on prose,
+your tests need prose-shaped inputs. The temptation to use
+`"a a a a"` patterns for clarity is real, and the failure mode is
+silent — the test reports passing or failing for reasons unrelated
+to the logic you're trying to test.
+
+The Python `-0` quirk is its own micro-lesson: any time you slice with
+a parameter that could be zero, **explicitly handle the zero case** —
+don't rely on the negative-indexing intuition. This bug would have
+shipped silently if the test fixture had worked properly.
+
+---
+
+## Finding 17 — Embedding models silently truncate; "chapter-level" is really "chapter-opening-level"
+
+**Symptom.** The two-collection design (`hp_chapters` for breadth,
+`hp_paragraphs` for precision) embeds whole chapters as single points
+into `hp_chapters`. Chapter texts are 3,000–5,000 tokens. The embedder
+is `bge-large-en-v1.5` with a 512-token max sequence length. Sentence-
+transformers tokenises, **truncates to 512 tokens**, and embeds — with
+no warning. The "chapter-level" embedding is therefore a
+"first-paragraph-of-chapter" embedding, not a whole-chapter
+representation.
+
+**Root cause.** Dense embedding models have fixed context windows;
+sentence-transformers' default behaviour for over-length input is silent
+truncation, not an error or even a log line. The mismatch between
+"point in `hp_chapters`" and "vector representing the chapter" is
+invisible at the storage layer — Qdrant stores 1024-dim vectors
+identically whether they came from 512 tokens or 50,000.
+
+**Fix.** None applied at this stage — the lab accepts the limitation.
+Two options if it bites later:
+1. Mean-pool windowed embeddings: split the chapter into 512-token
+   windows, embed each, average. Standard fix for long-document
+   embedding; non-trivial because pooling strategy (mean vs. attention-
+   weighted vs. CLS) affects retrieval quality.
+2. Use a long-context embedder (`bge-m3`, `text-embedding-3-large`,
+   `nomic-embed-text-v1.5`) — most cap at 8k tokens, enough for
+   most chapters without windowing.
+
+For the lab, the truncation bias is *probably acceptable*: HP chapter
+openings reliably establish setting and characters, so the first 512
+tokens carry signal that's representative of the chapter's broader
+topic. But this is an assumption, not a measurement. If chapter-level
+retrieval ever lands wrong-but-confidently in evaluation, this is the
+first place to look.
+
+**Lesson.** *Storage-layer types lie about semantic content.* A field
+called `hp_chapters` storing "chapter-level vectors" hides whether the
+vector actually represents the chapter or just its opening. The model's
+context window is a load-bearing constraint that doesn't appear
+anywhere in the schema, the collection name, or the upsert call. Three
+layers of abstraction — embedder API, vector store, application code —
+each pass the truncation through without flagging it.
+
+The defensive pattern: any time you embed text whose length isn't
+bounded by your code, **assert it fits the model's context window
+explicitly** (or accept the truncation and document it where future-you
+will re-encounter the question). Naming a thing for what you wish it
+were doesn't make it that.
+
+---
+
+## Finding 18 — Qdrant silently brute-forces below the indexing threshold
+
+**Symptom.** After upserting 5,575 vectors across `hp_chapters` (198)
+and `hp_paragraphs` (5,377), both collections report
+`indexed_vectors_count: 0` despite a fully-configured `hnsw_config`
+(`m=16`, `ef_construct=100`). HNSW exists in the config but is not
+actually built; queries fall back to brute-force cosine over every
+point in the collection.
+
+**Root cause.** Qdrant's `optimizer_config.indexing_threshold` defaults
+to **20,000 vectors per segment**. Below that, building an HNSW graph
+costs more in indexing-time and memory than it saves at query-time, so
+the optimizer skips it. With 5k points in 8 segments (~700/segment),
+no segment ever crosses the threshold, and the HNSW config is purely
+declarative — it describes what *would* be built if the collection
+grew. A naive reading of "we're using HNSW" is wrong: at this scale,
+we're using exhaustive search.
+
+**Fix.** None applied — at this corpus size, brute-force is genuinely
+faster than HNSW (HNSW is approximate, with overhead that beats the
+savings only past ~10k points). Two options if explicit HNSW behaviour
+matters (e.g., portfolio-grade demonstration):
+1. Lower `optimizer_config.indexing_threshold` to ~1,000 in
+   `ensure_collection` — forces HNSW to build even for small
+   collections, useful for showing the index path actually runs.
+2. Live with brute force, document the threshold explicitly in the
+   code, and let scale dictate when HNSW kicks in.
+
+For the lab, option 2 is correct: brute-force is faster *and* more
+accurate at this size. But the gap between "config says HNSW" and
+"server actually does HNSW" is a real failure mode for anyone
+benchmarking ANN performance on a small dataset and concluding their
+HNSW tuning matters when it doesn't.
+
+**Lesson.** *Configuration declares intent; runtime decides
+behaviour.* The HNSW config is real, just not active yet. Three
+defaults conspire to obscure this:
+- HNSW config in the API surface (suggests HNSW is on).
+- `indexed_vectors_count` field returning `0` (the only honest signal).
+- No log line, no warning, no doc-popup explaining the threshold.
+
+The defensive pattern is the same as Finding 17: **assert the system is
+in the state you think it's in, don't assume.** For Qdrant, that means
+inspecting `indexed_vectors_count` after upsert and either accepting
+brute-force or lowering the threshold deliberately. For any vector
+store, "I configured an index" doesn't imply "the index is built";
+verify with a dedicated check.
+
+---
+
 ## Pattern across these findings
 
 **The ones we caught by inspecting real output**, not by writing tests in
@@ -705,11 +852,12 @@ signal vs use-the-author's-metadata (Finding 3), naive subset clustering
 (Finding 4), naive concatenation (Finding 5), naive trust in coref output
 (Finding 6), naive trust in NER classification on out-of-domain text
 (Finding 7), bytes-level equality across probabilistic boundaries
-(Finding 8). Eight findings, eight instances of "the default is wrong
-for this corpus / hardware / scale / domain." Not the libraries' fault —
-they're tuned for the median use case. The lesson is structural: every
-default in a data pipeline is a hidden assumption you should surface
-before relying on it.
+(Finding 8), silent embedder truncation (Finding 17), silent vector-store
+indexing threshold (Finding 18). Ten findings, ten instances of "the
+default is wrong for this corpus / hardware / scale / domain." Not the
+libraries' fault — they're tuned for the median use case. The lesson
+is structural: every default in a data pipeline is a hidden assumption
+you should surface before relying on it.
 
 **Three findings (6, 7, 8) are specifically about probabilistic-model
 output**: coref errors, NER domain shift, NER/coref boundary
