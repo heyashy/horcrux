@@ -18,6 +18,7 @@ from horcrux.characters import (
     _normalise_mention,
     _shares_significant_token,
     _significant_tokens,
+    apply_overrides,
     claim_single_word_clusters,
     cluster_aliases,
     extract_characters,
@@ -345,6 +346,94 @@ def test_lookup_label_returns_display_form():
 
 def test_lookup_label_unknown_returns_none():
     assert lookup_label(ALIAS_DICT, "unknown_id") is None
+
+
+# ── apply_overrides ──────────────────────────────────────────────
+
+def test_apply_overrides_drops_listed_ids():
+    aliases = {
+        "harry_potter": {"label": "Harry Potter", "aliases": ["Harry"]},
+        "quidditch": {"label": "Quidditch", "aliases": ["Quidditch"]},
+    }
+    overrides = {"drop": ["quidditch"]}
+    result = apply_overrides(aliases, overrides)
+    assert "quidditch" not in result
+    assert "harry_potter" in result
+
+
+def test_apply_overrides_drop_unknown_id_silent():
+    aliases = {"harry_potter": {"label": "Harry Potter", "aliases": ["Harry"]}}
+    result = apply_overrides(aliases, {"drop": ["nonexistent"]})
+    assert result == aliases
+
+
+def test_apply_overrides_force_merge_combines_secondaries_into_primary():
+    aliases = {
+        "sirius_black": {"label": "Sirius Black", "aliases": ["Sirius", "Black"]},
+        "padfoot": {"label": "Padfoot", "aliases": ["Padfoot"]},
+        "snuffles": {"label": "Snuffles", "aliases": ["Snuffles"]},
+    }
+    overrides = {"force_merge": [["sirius_black", "padfoot", "snuffles"]]}
+    result = apply_overrides(aliases, overrides)
+    # Secondaries removed
+    assert "padfoot" not in result
+    assert "snuffles" not in result
+    # Primary retained, with secondaries' labels + aliases folded in
+    assert "sirius_black" in result
+    assert result["sirius_black"]["label"] == "Sirius Black"
+    assert "Padfoot" in result["sirius_black"]["aliases"]
+    assert "Snuffles" in result["sirius_black"]["aliases"]
+
+
+def test_apply_overrides_force_merge_unknown_primary_skipped():
+    aliases = {"padfoot": {"label": "Padfoot", "aliases": ["Padfoot"]}}
+    overrides = {"force_merge": [["nonexistent_primary", "padfoot"]]}
+    result = apply_overrides(aliases, overrides)
+    # Primary doesn't exist, so the merge is skipped; secondaries left alone
+    assert "padfoot" in result
+
+
+def test_apply_overrides_force_merge_unknown_secondary_skipped():
+    aliases = {"sirius_black": {"label": "Sirius Black", "aliases": ["Sirius"]}}
+    overrides = {"force_merge": [["sirius_black", "padfoot"]]}
+    # Padfoot doesn't exist; merge silently skips that ID
+    result = apply_overrides(aliases, overrides)
+    assert "sirius_black" in result
+    assert "padfoot" not in result
+
+
+def test_apply_overrides_does_not_mutate_input():
+    import copy
+    aliases = {"harry_potter": {"label": "Harry Potter", "aliases": ["Harry"]}}
+    snapshot = copy.deepcopy(aliases)
+    apply_overrides(aliases, {"drop": ["harry_potter"]})
+    assert aliases == snapshot
+
+
+def test_apply_overrides_drop_then_merge_in_one_pass():
+    aliases = {
+        "voldemort": {"label": "Voldemort", "aliases": ["Voldemort"]},
+        "tom_riddle": {"label": "Tom Riddle", "aliases": ["Tom Riddle", "Tom"]},
+        "potterwatch": {"label": "Potterwatch", "aliases": ["Potterwatch"]},
+    }
+    overrides = {
+        "drop": ["potterwatch"],
+        "force_merge": [["voldemort", "tom_riddle"]],
+    }
+    result = apply_overrides(aliases, overrides)
+    assert "potterwatch" not in result
+    assert "tom_riddle" not in result
+    assert "voldemort" in result
+    assert "Tom Riddle" in result["voldemort"]["aliases"]
+    assert "Tom" in result["voldemort"]["aliases"]
+
+
+def test_apply_overrides_skips_short_force_merge_groups():
+    """Length-1 group is a no-op; doesn't crash."""
+    aliases = {"harry_potter": {"label": "Harry Potter", "aliases": ["Harry"]}}
+    overrides = {"force_merge": [["harry_potter"]]}
+    result = apply_overrides(aliases, overrides)
+    assert result == aliases
 
 
 # ── _is_meaningful_mention ───────────────────────────────────────

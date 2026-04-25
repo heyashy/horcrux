@@ -587,6 +587,52 @@ def lookup_label(alias_dict: dict[str, dict], char_id: str) -> str | None:
     return record["label"] if record else None
 
 
+def apply_overrides(
+    alias_dict: dict[str, dict],
+    overrides: dict,
+) -> dict[str, dict]:
+    """Apply Tier 3 manual overrides to an ID-indexed alias dict.
+
+    Operations supported:
+
+    - ``drop`` — list of character IDs to remove entirely. For NER false
+      positives (places, objects, magical concepts, prose fragments).
+
+    - ``force_merge`` — list of merge groups, each ``[primary_id, *secondary_ids]``.
+      Each secondary's label and aliases are added to the primary; secondaries
+      are then removed. For semantic aliases that no orthographic algorithm
+      could derive (Padfoot → Sirius, Tom Riddle → Voldemort).
+
+    Pure function; doesn't mutate input.
+    """
+    # Deep-copy so we don't mutate caller's dict.
+    result: dict[str, dict] = {
+        cid: {"label": rec["label"], "aliases": list(rec["aliases"])}
+        for cid, rec in alias_dict.items()
+    }
+
+    for char_id in overrides.get("drop", []):
+        result.pop(char_id, None)
+
+    for group in overrides.get("force_merge", []):
+        if len(group) < 2:
+            continue
+        primary_id = group[0]
+        if primary_id not in result:
+            continue
+        primary_aliases = result[primary_id]["aliases"]
+        for secondary_id in group[1:]:
+            secondary = result.pop(secondary_id, None)
+            if secondary is None:
+                continue
+            # Merge label + aliases of secondary into primary's alias list.
+            for alias in [secondary["label"], *secondary["aliases"]]:
+                if alias not in primary_aliases:
+                    primary_aliases.append(alias)
+
+    return result
+
+
 def claim_single_word_clusters(
     clusters: dict[str, list[str]],
 ) -> dict[str, list[str]]:

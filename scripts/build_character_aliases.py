@@ -22,6 +22,7 @@ from rich.table import Table
 
 from horcrux.chapters import load_chapters_json
 from horcrux.characters import (
+    apply_overrides,
     claim_single_word_clusters,
     cluster_aliases,
     count_mentions,
@@ -119,6 +120,24 @@ def main() -> None:
     # keys, with separate `label` (display form) and `aliases` (surface
     # forms). Decouples identity from display — see Finding 15.
     id_indexed = to_id_indexed(final_clusters)
+
+    # Tier 3 — apply hand-curated overrides for cases the deterministic
+    # tiers can't handle (semantic aliases, NER false positives).
+    overrides_path = Path("data/overrides/character_overrides.json")
+    if overrides_path.exists():
+        console.print("\n[bold]Tier 3 — manual overrides[/]")
+        overrides = json.loads(overrides_path.read_text())
+        before = len(id_indexed)
+        id_indexed = apply_overrides(id_indexed, overrides)
+        dropped = before - len(id_indexed)
+        merged = sum(len(g) - 1 for g in overrides.get("force_merge", []) if isinstance(g, list))
+        console.print(
+            f"[dim]dropped {dropped} clusters, merged {merged} via force_merge[/]"
+        )
+    else:
+        console.print(
+            f"\n[yellow]no overrides file at {overrides_path} — skipping Tier 3[/]"
+        )
 
     output_path = Path("data/processed/aliases_tier1.json")
     output_path.parent.mkdir(parents=True, exist_ok=True)

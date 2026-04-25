@@ -1,0 +1,51 @@
+{
+  "_doc": "Tier 3 manual overrides — applied as the final pass after Tier 1a/b/c. See ADR-0006 + docs/lab/findings.md (Findings 11, 13). The 'drop' list removes NER false positives (places, magical concepts, prose fragments). 'force_merge' performs semantic merges no orthographic algorithm could derive (Marauder nicknames, Voldemort epithets). Each force_merge group is [primary_id, ...secondary_ids]; secondaries fold into primary then are removed.",
+
+  "drop": [
+    "privet_drive", "knockturn_alley", "burrow", "smeltings", "kent",
+    "yorkshire", "surrey", "hogsmeade", "stoatshead_hill", "wisteria_walk",
+    "little_hangleton", "godrics_hollow", "nurmengard", "grimmauld_place",
+    "diagon_alley", "the_leaky_cauldron",
+
+    "quidditch", "gringotts", "hogwarts_castle", "gryffindor", "ravenclaws",
+    "the_top_box", "durmstrang", "beauxbatons",
+
+    "wizard", "wizarding", "muggles", "vampires", "ghouls", "veela",
+    "dark_arts", "dark_magic", "dark", "death_eater", "horcruxes",
+    "secret_keeper", "animagus", "headmaster", "head_boy", "potions",
+    "arithmancy", "seer", "healer", "chaser", "seeker", "keeper",
+    "gryffindor_keeper", "the_floo_network", "the_elder_wand",
+    "marauders_map", "invisibility_cloak", "potterwatch",
+
+    "remembrall", "howler", "mandrake", "bludger", "quaffle", "snitch",
+    "firebolt", "shooting_star", "goblet", "freezing_charm",
+    "stunning_spells", "vanishing_spells", "imperius_curse",
+    "exploding_snap", "alohomora", "lumos", "avada_kedavra",
+    "sectumsempra", "levicorpus", "filibuster", "kwikspell",
+    "summon", "stun", "disarm", "disapparate", "apparating",
+    "portkeys", "jinxes", "kiss", "calm", "snow",
+    "footsteps", "dawn", "hall", "hallow", "deathstick",
+    "felix_felicis", "wronski_feint", "a_summoning_charm",
+    "skiving_snackboxes", "pygmy_puffs", "bertie_botts_every_flavor_beans",
+    "chocolate_frogs", "cauldron_cakes", "knuts", "galleon",
+    "chamber", "order", "dot", "tibbles", "binky", "tam",
+    "wizard_wheezes", "valentines_day",
+    "which_broomstick", "daily_prophet", "quibbler", "nasty",
+    "blimey", "nah", "eurgh", "aaah", "tt", "iam", "jus",
+    "mug", "bin", "bush", "wolf", "doesn", "tha", "chuck",
+    "fer_yeh", "yeh_don", "harry_knew_ron", "fred_and_george",
+    "fred_george", "harry_ron", "harry_ron_hermione",
+    "midgen", "miss_edgecombe", "girl", "king",
+
+    "harry_james_potter", "arry_potter",
+
+    "mary_grandpré", "arthur_a_levine_books"
+  ],
+
+  "force_merge": [
+    ["sirius_black", "padfoot", "snuffles"],
+    ["remus_lupin", "moony"],
+    ["peter_pettigrew", "wormtail"],
+    ["voldemort", "tom_riddle", "dark_lord", "t_m_riddle"]
+  ]
+}

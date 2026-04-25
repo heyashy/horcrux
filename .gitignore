@@ -6,7 +6,9 @@ data_lake/*
 # ── Derived / generated data ──────────────────────────────────────
 # Never commit anything derived from copyrighted source material.
 *.pdf
-data/
+data/*
+!data/overrides
+!data/overrides/**
 ocr_cache/
 chunks/
 horcrux.db                  # SQLite checkpointer state
