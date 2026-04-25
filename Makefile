@@ -3,7 +3,7 @@
 # profile (~/.zshrc / ~/.bashrc) has been sourced in this session.
 export PATH := $(HOME)/.temporalio/bin:$(HOME)/.local/bin:$(PATH)
 
-.PHONY: help preflight local temporal proxy worker run ingest doctor test integration-test smoke lint format
+.PHONY: help preflight local temporal proxy worker run ingest chapters doctor test integration-test smoke lint format
 
 # Default target — print available commands.
 help:
@@ -19,7 +19,8 @@ help:
 	@echo ""
 	@echo "  App processes:"
 	@echo "    make worker            Start the Temporal worker (foreground)"
-	@echo "    make ingest            Trigger the ingest workflow"
+	@echo "    make ingest            Trigger the OCR ingest workflow (full corpus)"
+	@echo "    make chapters          Derive chapters.json from raw_pages.json (silver tier)"
 	@echo "    make run Q=\"query\"     Run a single query end-to-end"
 	@echo ""
 	@echo "  Diagnostics & quality:"
@@ -79,6 +80,9 @@ worker:
 
 ingest:
 	uv run python -m horcrux.main ingest
+
+chapters:
+	uv run python scripts/build_chapters.py
 
 run:
 	@if [ -z "$(Q)" ]; then \

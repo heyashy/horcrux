@@ -20,32 +20,29 @@ from fastcoref import FCoref
 from rich.console import Console
 from rich.table import Table
 
-from horcrux.chapters import extract_chapters
+from horcrux.chapters import load_chapters_json
 from horcrux.characters import (
     claim_single_word_clusters,
     cluster_aliases,
     count_mentions,
     merge_coref_into_clusters,
     resolve_coref_aliases,
+    to_id_indexed,
 )
-from horcrux.cleansing import cleanse_pages
-from horcrux.config import settings
-from horcrux.models import RawPage
 
 
 def main() -> None:
     console = Console()
 
-    raw_path = Path("data/processed/raw_pages.json")
-    if not raw_path.exists():
-        console.print(f"[red]missing:[/] {raw_path}")
+    chapters_path = Path("data/processed/chapters.json")
+    if not chapters_path.exists():
+        console.print(
+            f"[red]missing:[/] {chapters_path} — run `make chapters` first"
+        )
         return
 
-    raw = json.loads(raw_path.read_text())
-    pages = [RawPage(**p) for p in raw]
-    cleansed = cleanse_pages(pages)
-    chapters = extract_chapters(settings.corpus_path, cleansed)
-    console.print(f"[dim]loaded {len(chapters)} chapters[/]")
+    chapters = load_chapters_json(chapters_path)
+    console.print(f"[dim]loaded {len(chapters)} chapters from chapters.json[/]")
 
     # Disable parser/lemmatizer/attribute_ruler — we only need NER.
     console.print("[dim]loading spaCy en_core_web_sm…[/]")
@@ -118,10 +115,18 @@ def main() -> None:
         table.add_row(canonical, alias_str, str(total))
     console.print(table)
 
+    # Convert to industry-standard ID-indexed shape: opaque slug IDs as
+    # keys, with separate `label` (display form) and `aliases` (surface
+    # forms). Decouples identity from display — see Finding 15.
+    id_indexed = to_id_indexed(final_clusters)
+
     output_path = Path("data/processed/aliases_tier1.json")
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json.dumps(final_clusters, indent=2, ensure_ascii=False))
-    console.print(f"\n[green]saved[/] {output_path}")
+    output_path.write_text(json.dumps(id_indexed, indent=2, ensure_ascii=False))
+    console.print(
+        f"\n[green]saved[/] {output_path}  "
+        f"[dim]({len(id_indexed)} characters, ID-indexed)[/]"
+    )
     console.print(
         "\n[bold]Look for these gaps[/] (Tier 2 LLM step will fix):\n"
         "  · 'Voldemort' / 'Tom Riddle' / 'He Who Must Not Be Named' as separate clusters\n"

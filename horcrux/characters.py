@@ -60,6 +60,34 @@ _GENERIC_TITLES = frozenset({
 # and Ron"), which can't legitimately alias either character alone.
 _CONJUNCTIONS = frozenset({"and", "or", "&", "nor"})
 
+# Stop-modifiers that NER captures as part of a "PERSON" mention but which
+# aren't part of the character's identity. Examples from real corpus output:
+#   "Voldemort himself"  → noise, the name is "Voldemort"
+#   "Dear Harry"         → noise, the name is "Harry"
+#   "only Crookshanks"   → noise, the name is "Crookshanks"
+#   "poor old Ripper"    → noise, the name is "Ripper"
+#   "Harry blankly"      → noise (NER mistakenly captured a verb adverb)
+#
+# Word-boundary substring matching at chunk-extraction time still finds
+# the underlying name inside these phrases, so we don't need them as
+# explicit aliases — we just need to reject them as alias candidates.
+_STOP_MODIFIERS = frozenset({
+    # Reflexive pronouns (third-person)
+    "himself", "herself", "itself", "themselves", "oneself",
+    # Affection / address
+    "dear", "dearest", "darling", "sweet",
+    # Restrictive / focus
+    "only", "even", "just", "alone", "also", "merely",
+    # Quality adjectives that drift onto names in fiction
+    "poor", "old", "young", "dear",
+    # Adverbs that NER occasionally captures as part of "Name + adverb"
+    # tokenisations (e.g. "Harry blankly", "Ron grumpily"). The full set
+    # is open-ended; these are the ones that survived discovery.
+    "blankly", "grumpily", "muttered", "wearily", "happily", "hastily",
+    "calmly", "cautiously", "heavily", "weakly", "thickly", "spat",
+    "hoarsely",
+})
+
 
 def _significant_tokens(name: str) -> set[str]:
     """Lowercased tokens with generic titles + articles stripped.
@@ -76,8 +104,22 @@ def _shares_significant_token(alias: str, target: str) -> bool:
     """Conservative gate for Tier 1b coref resolutions.
 
     Allows "Mr. Filch" → Filch, blocks "He-Who-Must-Not-Be-Named" →
-    Dumbledore. Semantic aliases (no shared tokens) are deliberately
-    deferred to Tier 2 LLM, which has the context to handle them.
+    Dumbledore. Semantic aliases (no shared tokens) are deferred to
+    manual override via Tier 3.
+
+    Note: this rule alone allows `Albus Dumbledore` → `Ariana Dumbledore`
+    (both share 'dumbledore', looks like a valid attribution by tokens
+    alone). The corpus-wide person_text_set check in `resolve_coref_aliases`
+    is the second line of defence — blocking *any* NER-tagged PERSON
+    entity from being attributed as an alias of another. See Finding 10.
+
+    A purely orthographic rule cannot distinguish:
+      - Albus / Ariana Dumbledore (block — different people)
+      - Mad-Eye / Alastor Moody  (allow — same person, nickname)
+    Both have "shared surname + dissimilar unique part." The right tool
+    for that decision is world knowledge, not orthography. Tier 3 manual
+    override handles whichever cases the corpus-wide person check gets
+    wrong.
     """
     a = _significant_tokens(alias)
     t = _significant_tokens(target)
@@ -123,17 +165,30 @@ def count_mentions(chapters: Iterable[Chapter], nlp: Language) -> Counter[str]:
     Possessive suffixes ('s, 's) are stripped before counting so possessive
     forms fold into their root name's count.
 
-    Uses `nlp.pipe` for batched throughput — much faster than calling
-    `nlp(text)` in a Python loop.
+    Multi-token NER mentions are filtered through `_is_alias_candidate`
+    BEFORE counting — drops prose-fragment false positives like
+    "Harry blankly", "Harry, Ron", "Voldemort himself" that would
+    otherwise survive as standalone clusters and pollute Tier 1c's
+    owner index. Single-token names (`Harry`, `Hogwarts`) are kept; the
+    stop-modifier filter only matches multi-token forms anyway.
+
+    Uses `nlp.pipe` for batched throughput.
     """
     counter: Counter[str] = Counter()
     texts = [chapter.text for chapter in chapters]
     for doc in nlp.pipe(texts, batch_size=4):
         for ent in doc.ents:
-            if ent.label_ == "PERSON":
-                name = _normalise_mention(ent.text)
-                if name:
-                    counter[name] += 1
+            if ent.label_ != "PERSON":
+                continue
+            name = _normalise_mention(ent.text)
+            if not name:
+                continue
+            # Reject multi-token prose-fragment false positives. Single-
+            # token names always pass (they have no stop-modifier or
+            # conjunction tokens by definition).
+            if len(name.split()) > 1 and not _is_alias_candidate(name, max_words=4):
+                continue
+            counter[name] += 1
     return counter
 
 
@@ -177,6 +232,7 @@ def cluster_aliases(
     *,
     min_count: int = 3,
     similarity_threshold: int = 85,
+    min_anchor_count: int = 5,
 ) -> dict[str, list[str]]:
     """Cluster mention strings into canonical → aliases groups.
 
@@ -186,6 +242,14 @@ def cluster_aliases(
             (cuts the long tail of NER noise).
         similarity_threshold: 0-100; rapidfuzz ratio threshold for
             clustering by character-level similarity.
+        min_anchor_count: a multi-word name with 3+ significant tokens
+            must have at least this many mentions to act as a *bridge*
+            in subset clustering. Prevents transitive merges via rare
+            full-name forms — e.g. "Harry James Potter" with count=2
+            won't bridge "Harry Potter" and "James Potter" into one
+            cluster (they're different people; the bridge is just a rare
+            full-name form). Doesn't apply to 2-significant-token names
+            since those don't bridge two distinct shorter forms.
 
     Returns:
         dict[canonical, list[aliases sorted by frequency desc]]
@@ -215,8 +279,25 @@ def cluster_aliases(
     # rapidfuzz handles this in well under a second.
     for i, a in enumerate(candidates):
         for b in candidates[i + 1 :]:
-            if _is_alias_pair(a, b, similarity_threshold):
-                union(a, b)
+            if not _is_alias_pair(a, b, similarity_threshold):
+                continue
+
+            # Anchor-count check: when a multi-word subset merge is
+            # mediated by a 3+-significant-token "anchor", require that
+            # anchor to be common enough to be canonical. Stops rare
+            # full-name forms (like "Harry James Potter" with count=2)
+            # from bridging two otherwise-distinct two-word names
+            # ("Harry Potter" and "James Potter"). See Finding 9.
+            a_sig = _significant_tokens(a)
+            b_sig = _significant_tokens(b)
+            if len(a_sig) > 1 and len(b_sig) > 1:
+                # Identify the larger (potential anchor)
+                larger_name = a if len(a_sig) > len(b_sig) else b
+                larger_sig = a_sig if larger_name is a else b_sig
+                if len(larger_sig) >= 3 and counts[larger_name] < min_anchor_count:
+                    continue
+
+            union(a, b)
 
     # Group by root.
     groups: dict[str, list[str]] = {}
@@ -260,14 +341,16 @@ def _is_alias_candidate(text: str, *, max_words: int = 4) -> bool:
     """Stricter than `_is_meaningful_mention`: filter to title-like forms.
 
     Coref clusters legitimately contain prose fragments ("the round-faced
-    boy", "Harry and Ron, who…") that are valid co-references but useless
-    as alias keys for chunk tagging. Restrict to compact, title-like
-    phrases referring to a single person.
+    boy", "Harry and Ron, who…") and modifier+name pairs ("Voldemort
+    himself", "Dear Harry") that are valid co-references but useless as
+    alias keys for chunk tagging. Restrict to compact, title-like phrases
+    referring to a single person.
 
     Rules on top of `_is_meaningful_mention`:
       - ≤ max_words tokens long
       - no commas, semicolons, or quote marks (running prose)
       - no conjunctions (multi-person mentions)
+      - no stop-modifiers (modifier+name forms that aren't real aliases)
     """
     if not _is_meaningful_mention(text):
         return False
@@ -275,7 +358,10 @@ def _is_alias_candidate(text: str, *, max_words: int = 4) -> bool:
         return False
     if len(text.split()) > max_words:
         return False
-    if any(w in _CONJUNCTIONS for w in text.lower().split()):
+    words = text.lower().split()
+    if any(w in _CONJUNCTIONS for w in words):
+        return False
+    if any(w in _STOP_MODIFIERS for w in words):
         return False
     return True
 
@@ -316,31 +402,58 @@ def resolve_coref_aliases(
             len == 1 → confident dominant resolution
             len > 1  → ambiguous, multi-tag at chunk time
     """
+    import gc
+    import logging as _logging
+
+    _log = _logging.getLogger(__name__)
+
     resolutions: dict[str, Counter[str]] = defaultdict(Counter)
 
     chapters_list = list(chapters)
     if not chapters_list:
         return {}
 
-    texts = [c.text for c in chapters_list]
-    preds = coref_model.predict(texts=texts)
+    total = len(chapters_list)
 
-    for chapter, pred in zip(chapters_list, preds, strict=True):
-        text = chapter.text
-
-        # NER PERSON spans AND a lower-cased text set for boundary-tolerant
-        # matching (coref and NER often disagree on exact char boundaries).
-        doc = nlp(text)
-        person_spans: dict[tuple[int, int], str] = {}
-        person_text_set: set[str] = set()
+    # PRE-PASS: NER over every chapter, cache per-chapter spans, and
+    # accumulate a CORPUS-WIDE person_text_set. Any NER PERSON entity
+    # that appears anywhere in the corpus is a known character, and must
+    # not be attributed as an alias of another character — even in
+    # chapters where NER didn't tag it locally. See Finding 10: per-
+    # chapter person sets leak attributions across same-surname entities
+    # (Albus Dumbledore got merged into the Ariana Dumbledore cluster
+    # because chapters about Ariana didn't tag Albus locally).
+    _log.info("NER pre-pass over %d chapters", total)
+    chapter_person_spans: list[dict[tuple[int, int], str]] = []
+    corpus_person_texts: set[str] = set()
+    for chapter in chapters_list:
+        doc = nlp(chapter.text)
+        spans: dict[tuple[int, int], str] = {}
         for ent in doc.ents:
             if ent.label_ != "PERSON":
                 continue
             normalised = _normalise_mention(ent.text)
             if not normalised:
                 continue
-            person_spans[(ent.start_char, ent.end_char)] = normalised
-            person_text_set.add(normalised.lower())
+            spans[(ent.start_char, ent.end_char)] = normalised
+            corpus_person_texts.add(normalised.lower())
+        chapter_person_spans.append(spans)
+
+    # Stream chapters one at a time. Passing all texts in a single
+    # `predict(texts=[...])` call OOMs on full-corpus runs (each chapter
+    # becomes a model tensor; ~200 chapters × ~30KB text simultaneously
+    # exceeds GPU+CPU memory). Per-chapter prediction keeps peak memory
+    # bounded to one chapter's model state at a time.
+    for i, chapter in enumerate(chapters_list):
+        if i % 10 == 0:
+            _log.info("coref pass: chapter %d/%d", i + 1, total)
+
+        preds = coref_model.predict(texts=[chapter.text])
+        pred = preds[0]
+        text = chapter.text
+
+        # Per-chapter NER cached from the pre-pass.
+        person_spans = chapter_person_spans[i]
 
         for cluster in pred.get_clusters(as_strings=False):
             # Use a SET for named — multi-PERSON clusters get rejected later.
@@ -356,7 +469,7 @@ def resolve_coref_aliases(
                 # Span-exact match OR text match → known PERSON entity.
                 is_person = (
                     (span_start, span_end) in person_spans
-                    or normalised.lower() in person_text_set
+                    or normalised.lower() in corpus_person_texts
                 )
                 if is_person:
                     named_in_cluster.add(normalised)
@@ -372,7 +485,7 @@ def resolve_coref_aliases(
             for mention in alias_candidates:
                 # Defence in depth: if the candidate text is still a known
                 # PERSON elsewhere, don't attribute it as an alias.
-                if mention.lower() in person_text_set:
+                if mention.lower() in corpus_person_texts:
                     continue
                 # Tier 1b is strictly orthographic — alias must share at
                 # least one significant token with the target. Semantic
@@ -381,6 +494,20 @@ def resolve_coref_aliases(
                 if not _shares_significant_token(mention, owner):
                     continue
                 resolutions[mention][owner] += 1
+
+        # Per-chapter cleanup. Without this, model-state tensors
+        # accumulate in memory across iterations and OOM on full-corpus
+        # runs. (NER docs were processed in the pre-pass and only spans
+        # are retained per-chapter — much smaller than full Doc objects.)
+        del preds, pred
+        if (i + 1) % 5 == 0:
+            gc.collect()
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            except ImportError:
+                pass
 
     # Compress to dominant-or-ambiguous; drop low-occurrence noise.
     result: dict[str, list[str]] = {}
@@ -397,6 +524,67 @@ def resolve_coref_aliases(
             result[title] = [name for name, _ in ranked]
 
     return result
+
+
+# ── Identifier model: separate ID from surface form ─────────────
+# Industry-standard pattern: opaque identifier decouples identity from
+# display label, supporting renames, multi-language, and disambiguation
+# without rewriting downstream consumers. See Finding 15.
+
+_SLUG_PUNCT = re.compile(r"[^\w\s]+", re.UNICODE)
+_SLUG_WHITESPACE = re.compile(r"\s+")
+
+
+def slugify(name: str) -> str:
+    """Generate a stable, opaque identifier from a display name.
+
+    Deterministic — same input always produces same slug. Re-running
+    discovery doesn't shuffle character IDs.
+
+    `Harry Potter`        → `harry_potter`
+    `Albus Dumbledore`    → `albus_dumbledore`
+    `T. M. Riddle`        → `t_m_riddle`
+    `Mary GrandPré`       → `mary_grandpré`     (Unicode preserved)
+    """
+    slug = _SLUG_PUNCT.sub("", name.lower()).strip()
+    slug = _SLUG_WHITESPACE.sub("_", slug)
+    return slug
+
+
+def to_id_indexed(clusters: dict[str, list[str]]) -> dict[str, dict]:
+    """Convert canonical-keyed cluster dict to ID-keyed entity records.
+
+    Output shape:
+        {
+            "<slug>": {"label": "<canonical>", "aliases": [...]},
+            ...
+        }
+
+    Slug collisions (different canonicals producing the same slug)
+    are disambiguated by appending a numeric suffix, deterministically.
+    """
+    result: dict[str, dict] = {}
+    for canonical, aliases in clusters.items():
+        slug = slugify(canonical)
+        if not slug:
+            continue
+        # Disambiguate collisions by suffix.
+        if slug in result:
+            i = 2
+            while f"{slug}_{i}" in result:
+                i += 1
+            slug = f"{slug}_{i}"
+        result[slug] = {
+            "label": canonical,
+            "aliases": list(aliases),
+        }
+    return result
+
+
+def lookup_label(alias_dict: dict[str, dict], char_id: str) -> str | None:
+    """Return the display label for a character ID, or None if unknown."""
+    record = alias_dict.get(char_id)
+    return record["label"] if record else None
 
 
 def claim_single_word_clusters(
@@ -429,10 +617,21 @@ def claim_single_word_clusters(
     membership snapshot, not a live-mutating one.
     """
     # Index: significant_token → list of multi-word CANONICALS containing it.
+    # Only ≤ 2-significant-token canonicals are indexed as "owners".
+    # Three-or-more-significant-token forms are full-name expansions
+    # ("Harry James Potter", "Albus Wulfric Brian Dumbledore"), not
+    # personal-name anchors. Including them as owners blocks shorter
+    # forms from folding (e.g. "Harry" sees two owners — "Harry Potter"
+    # and "Harry James Potter" — and refuses to fold even though
+    # "Harry Potter" is the obvious anchor). Same principle as Finding 9
+    # at Tier 1a; applied here at Tier 1c.
     multiword_owners: dict[str, list[str]] = defaultdict(list)
     for canonical in clusters:
         if len(canonical.split()) > 1:
-            for token in _significant_tokens(canonical):
+            sig_tokens = _significant_tokens(canonical)
+            if len(sig_tokens) > 2:
+                continue
+            for token in sig_tokens:
                 multiword_owners[token].append(canonical)
 
     new_clusters = {k: list(v) for k, v in clusters.items()}
@@ -505,13 +704,17 @@ def merge_coref_into_clusters(
 
 def extract_characters(
     text: str,
-    alias_dict: dict[str, list[str]],
+    alias_dict: dict[str, dict],
 ) -> list[str]:
-    """Find canonical character names mentioned in `text`.
+    """Find character IDs mentioned in `text`.
 
-    Whole-word substring matching. Each canonical is listed at most
-    once even if multiple of its aliases appear. Output is sorted for
-    deterministic comparison.
+    Returns sorted list of character IDs (slugs) — NOT display labels.
+    Caller does ID→label lookup for display via `lookup_label`. This
+    decouples identity from surface form (industry standard for entity
+    dictionaries — see Finding 15).
+
+    Whole-word substring matching, case-insensitive. Each character is
+    listed at most once even if multiple of its aliases appear.
     """
     if not text or not alias_dict:
         return []
@@ -519,11 +722,11 @@ def extract_characters(
     text_lower = text.lower()
     found: set[str] = set()
 
-    for canonical, aliases in alias_dict.items():
-        for alias in aliases:
+    for char_id, record in alias_dict.items():
+        for alias in record.get("aliases", []):
             pattern = r"\b" + re.escape(alias.lower()) + r"\b"
             if re.search(pattern, text_lower):
-                found.add(canonical)
-                break  # one matched alias per canonical is enough
+                found.add(char_id)
+                break  # one matched alias per character is enough
 
     return sorted(found)

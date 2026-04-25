@@ -21,8 +21,11 @@ from horcrux.characters import (
     claim_single_word_clusters,
     cluster_aliases,
     extract_characters,
+    lookup_label,
     merge_coref_into_clusters,
     resolve_coref_aliases,
+    slugify,
+    to_id_indexed,
 )
 from horcrux.models import Chapter
 
@@ -180,40 +183,81 @@ def test_all_below_min_count_returns_empty():
     assert cluster_aliases(counts, min_count=10) == {}
 
 
+def test_rare_three_word_anchor_does_not_bridge_two_word_names():
+    """Finding 9 regression — `Harry James Potter` with low count must
+    not bridge `Harry Potter` and `James Potter` (different people who
+    happen to share a parent full-name form)."""
+    counts = Counter({
+        "Harry Potter": 200,
+        "James Potter": 30,
+        "Harry James Potter": 2,   # rare bridge
+    })
+    clusters = cluster_aliases(counts, min_count=1, min_anchor_count=5)
+    # All three remain distinct; the rare anchor doesn't pull subsets in
+    canonicals = set(clusters.keys())
+    assert "Harry Potter" in canonicals
+    assert "James Potter" in canonicals
+    assert "Harry James Potter" in canonicals
+
+
+def test_common_three_word_anchor_does_bridge():
+    """Three-word forms that ARE common enough do bridge as expected.
+    This preserves "the Elder Wand" / "Elder Wand" merging — both
+    common enough to anchor."""
+    counts = Counter({
+        "Albus Dumbledore": 200,
+        "Albus Wulfric Brian Dumbledore": 10,
+    })
+    clusters = cluster_aliases(counts, min_count=1, min_anchor_count=5)
+    # Anchor count 10 ≥ 5 → merge allowed
+    canonicals = list(clusters.keys())
+    assert len(canonicals) == 1   # one merged cluster
+    members = clusters[canonicals[0]]
+    assert "Albus Dumbledore" in members
+    assert "Albus Wulfric Brian Dumbledore" in members
+
+
 # ── extract_characters ───────────────────────────────────────────
 
 ALIAS_DICT = {
-    "Harry Potter": ["Harry", "Harry Potter", "Potter"],
-    "Hermione Granger": ["Hermione", "Hermione Granger"],
-    "Severus Snape": ["Snape"],
+    "harry_potter": {
+        "label": "Harry Potter",
+        "aliases": ["Harry", "Harry Potter", "Potter"],
+    },
+    "hermione_granger": {
+        "label": "Hermione Granger",
+        "aliases": ["Hermione", "Hermione Granger"],
+    },
+    "severus_snape": {
+        "label": "Severus Snape",
+        "aliases": ["Snape"],
+    },
 }
 
 
-def test_finds_canonical_via_alias():
+def test_finds_id_via_alias():
     text = "Harry stared at Snape across the classroom."
-    assert extract_characters(text, ALIAS_DICT) == [
-        "Harry Potter", "Severus Snape"
-    ]
+    assert extract_characters(text, ALIAS_DICT) == ["harry_potter", "severus_snape"]
 
 
-def test_canonical_listed_once_per_chunk():
-    """Multiple aliases of the same canonical → canonical appears once."""
+def test_id_listed_once_per_chunk():
+    """Multiple aliases of the same character → ID appears once."""
     text = "Harry, Potter, the boy himself — all called Harry."
     chars = extract_characters(text, ALIAS_DICT)
-    assert chars.count("Harry Potter") == 1
+    assert chars.count("harry_potter") == 1
 
 
 def test_word_boundary_avoids_substring_false_positives():
     """`Harry` as a substring of `Harrying` should NOT match."""
     text = "Harrying winds buffeted the castle."
-    assert "Harry Potter" not in extract_characters(text, ALIAS_DICT)
+    assert "harry_potter" not in extract_characters(text, ALIAS_DICT)
 
 
 def test_case_insensitive():
     text = "harry potter and HERMIONE."
     chars = extract_characters(text, ALIAS_DICT)
-    assert "Harry Potter" in chars
-    assert "Hermione Granger" in chars
+    assert "harry_potter" in chars
+    assert "hermione_granger" in chars
 
 
 def test_empty_text_returns_empty():
@@ -232,6 +276,75 @@ def test_output_is_sorted():
     text = "Snape and Hermione and Harry walked to class."
     chars = extract_characters(text, ALIAS_DICT)
     assert chars == sorted(chars)
+
+
+# ── slugify ──────────────────────────────────────────────────────
+
+def test_slugify_basic():
+    assert slugify("Harry Potter") == "harry_potter"
+    assert slugify("Albus Dumbledore") == "albus_dumbledore"
+
+
+def test_slugify_strips_punctuation():
+    assert slugify("T. M. Riddle") == "t_m_riddle"
+    assert slugify("Mr. Filch") == "mr_filch"
+
+
+def test_slugify_collapses_whitespace():
+    assert slugify("Harry  Potter") == "harry_potter"
+    assert slugify("  Harry Potter  ") == "harry_potter"
+
+
+def test_slugify_deterministic():
+    """Same input → same output across calls."""
+    assert slugify("Voldemort") == slugify("Voldemort")
+
+
+def test_slugify_preserves_unicode_word_chars():
+    """Unicode letters survive (`\\w` is locale-aware)."""
+    assert slugify("Mary GrandPré") == "mary_grandpré"
+
+
+# ── to_id_indexed ────────────────────────────────────────────────
+
+def test_to_id_indexed_basic_shape():
+    clusters = {"Harry Potter": ["Harry Potter", "Harry"]}
+    result = to_id_indexed(clusters)
+    assert result == {
+        "harry_potter": {
+            "label": "Harry Potter",
+            "aliases": ["Harry Potter", "Harry"],
+        }
+    }
+
+
+def test_to_id_indexed_handles_collision():
+    """Two canonicals producing the same slug get disambiguated."""
+    clusters = {
+        "Tom Riddle": ["Tom Riddle"],
+        "Tom riddle": ["Tom riddle"],   # different canonical, same slug
+    }
+    result = to_id_indexed(clusters)
+    assert "tom_riddle" in result
+    assert "tom_riddle_2" in result
+
+
+def test_to_id_indexed_drops_empty_slugs():
+    """Canonicals that slug to empty strings get dropped."""
+    clusters = {".": ["."], "Harry Potter": ["Harry Potter"]}
+    result = to_id_indexed(clusters)
+    assert "harry_potter" in result
+    assert len(result) == 1
+
+
+# ── lookup_label ─────────────────────────────────────────────────
+
+def test_lookup_label_returns_display_form():
+    assert lookup_label(ALIAS_DICT, "harry_potter") == "Harry Potter"
+
+
+def test_lookup_label_unknown_returns_none():
+    assert lookup_label(ALIAS_DICT, "unknown_id") is None
 
 
 # ── _is_meaningful_mention ───────────────────────────────────────
@@ -425,6 +538,26 @@ def test_does_not_mutate_input():
     snapshot = {k: list(v) for k, v in clusters.items()}
     claim_single_word_clusters(clusters)
     assert clusters == snapshot
+
+
+def test_three_word_form_does_not_block_single_word_fold():
+    """Regression for the Harry-Potter destroy bug: when both
+    `Harry Potter` (2 sig tokens) and `Harry James Potter` (3 sig tokens)
+    exist, `Harry` should still fold into `Harry Potter`. The full-name
+    form is excluded from the owner index because it's an expansion,
+    not a personal-name anchor."""
+    clusters = {
+        "Harry Potter": ["Harry Potter"],
+        "Harry James Potter": ["Harry James Potter"],
+        "Harry": ["Harry"],
+    }
+    merged = claim_single_word_clusters(clusters)
+    # Harry folds into Harry Potter (the 2-sig-token form, not the
+    # 3-sig-token full name)
+    assert "Harry" not in merged
+    assert "Harry" in merged["Harry Potter"]
+    # Harry James Potter remains its own cluster
+    assert "Harry James Potter" in merged
 
 
 # ── merge_coref_into_clusters ────────────────────────────────────

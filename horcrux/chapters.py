@@ -11,8 +11,13 @@ Convention for this corpus:
 
 For corpora without bookmarks, regex-on-OCR-text would be the fallback.
 Not implemented here; would live alongside this module.
+
+Also provides JSON dump/load helpers for the silver-tier
+`chapters.json` artefact — book-grouped JSON shape that's natural for
+human inspection and trivial to flatten back into `list[Chapter]`.
 """
 
+import json
 import re
 from pathlib import Path
 
@@ -159,3 +164,65 @@ def extract_chapters(pdf_path: Path | str, pages: list[RawPage]) -> list[Chapter
         toc = doc.get_toc()
         last_page = len(doc)
     return chapters_from_toc(toc, pages, last_page)
+
+
+# ── JSON artefact helpers ─────────────────────────────────────────
+
+def _book_titles_from_toc(toc: list[TocEntry]) -> dict[int, str]:
+    """Walk the TOC and number book-start entries; return {book_num: title}."""
+    book_num = 0
+    titles: dict[int, str] = {}
+    for level, title, _page in toc:
+        if level == 1 and title.lower().startswith("harry potter"):
+            book_num += 1
+            titles[book_num] = title
+    return titles
+
+
+def dump_chapters_json(
+    chapters: list[Chapter],
+    pdf_path: Path | str,
+    output_path: Path | str,
+) -> None:
+    """Write chapters as book-grouped JSON: `{"books": [{book_num, title, chapters: [...]}]}`.
+
+    Uses the PDF's TOC for book titles. Chapters within each book are
+    sorted by chapter_num.
+    """
+    pdf_path = Path(pdf_path)
+    output_path = Path(output_path)
+
+    with pymupdf.open(pdf_path) as doc:
+        toc = doc.get_toc()
+    book_titles = _book_titles_from_toc(toc)
+
+    by_book: dict[int, list[Chapter]] = {}
+    for ch in chapters:
+        by_book.setdefault(ch.book_num, []).append(ch)
+
+    payload = {
+        "books": [
+            {
+                "book_num": book_num,
+                "title": book_titles.get(book_num, f"Book {book_num}"),
+                "chapters": [
+                    ch.model_dump()
+                    for ch in sorted(by_book[book_num], key=lambda c: c.chapter_num)
+                ],
+            }
+            for book_num in sorted(by_book)
+        ]
+    }
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False))
+
+
+def load_chapters_json(input_path: Path | str) -> list[Chapter]:
+    """Read book-grouped chapters.json; return flat list[Chapter] in book/chapter order."""
+    data = json.loads(Path(input_path).read_text())
+    return [
+        Chapter(**ch)
+        for book in data["books"]
+        for ch in book["chapters"]
+    ]
