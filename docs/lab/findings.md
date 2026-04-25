@@ -820,6 +820,213 @@ verify with a dedicated check.
 
 ---
 
+## Finding 19 — A feared failure mode that hybrid design masked
+
+**Symptom (predicted, not observed).** When chapter-level chunks were
+introduced (one point per chapter in `hp_chapters`), bge-large's
+512-token context window meant only the chapter opening was actually
+embedded (Finding 17). The worry: when the synthesis agent receives a
+chapter chunk in its candidate set, it might over-cite — treating the
+chunk as though it represented the full chapter content, including
+parts of the chapter the chunk's vector never saw.
+
+End-to-end testing on three queries (Cedric Diggory's killer; whether
+Harry was in love with Ron; what Crouch Jr. confessed under
+veritaserum) showed the leak **did not materialise**. Synthesis
+output stayed grounded in the cited passages.
+
+**Root cause of the non-failure.** The hybrid retrieval design pulls
+from **both** collections in parallel — chapters AND paragraphs. For
+queries whose answers live deep in a chapter (Crouch Jr.'s
+confession, mid-Veritaserum-chapter), the paragraph-level chunks
+covering those passages get retrieved alongside the chapter-level
+chunk. Paragraph chunks contain the actual evidence content; chapter
+chunks contribute breadth via the RRF score bonus when they overlap
+on topic.
+
+The mechanism that "should have" leaked — chapter-only citation —
+doesn't get a chance to fire because there's almost always a
+paragraph chunk in the candidate set carrying the real content.
+
+**Fix.** None needed. The architecture defended itself.
+
+**Lesson.** *Defence in depth makes individual layers robust to
+their own known weaknesses.* F17 is a real limitation of the chapter
+collection in isolation — but the chapter collection isn't used in
+isolation. The paragraph collection compensates. When you design
+multi-layered systems, individual-layer brittleness becomes acceptable
+if the upper layers route around it.
+
+The harder question this finding raises: how do you genuinely
+demonstrate the leak? A query whose answer is *only* in a
+chapter-not-paragraph chunk (i.e. only in tokens 1-512 of a chapter,
+nowhere else) is artificial — paragraph chunks span the same text. To
+test the hypothesis cleanly you'd need to either remove paragraph
+chunks from the candidate set, or construct a synthetic corpus.
+Neither is the right thing to do for the lab.
+
+This is also worth recording as evidence that **the lab's
+"surface failure modes" framing applies symmetrically — sometimes
+end-to-end verification surfaces the *absence* of an expected
+failure, which is itself informative.** Hybrid retrieval was added
+in Phase 4 for performance + recall reasons; this finding documents a
+secondary benefit that wasn't the reason for the design but is a
+real consequence of it.
+
+---
+
+## Finding 20 — Conviction calibration anchors high without literal-statement anchoring
+
+**Symptom.** Across multiple end-to-end queries, the synthesis agent
+returned `conviction=5/5` even when the passages supported the answer
+only indirectly:
+
+- *"Was Harry in love with Ron?"* — passages prove "Harry loved
+  Ginny" (the kissing scene, the "Ginny or Ron?" inner monologue).
+  They do not prove "Harry didn't love Ron" — that's an absence of
+  evidence, not evidence of absence. Agent returned 5/5.
+- *"Who killed Cedric Diggory?"* — Dumbledore's eulogy ("Cedric was
+  murdered by Lord Voldemort") supports the headline answer at 5/5,
+  but the agent's full response included Crouch-Jr-Imperiused-Krum
+  details where the citation chain is more indirect. Agent returned
+  5/5 on the whole answer, including the indirect parts.
+
+Critically, when the passages contained **no** evidence for the
+question (the conjunctivitis-spell query, see Finding 21), the agent
+correctly returned `conviction=1/5`. So the rubric isn't broken at
+the extremes — it just doesn't bite at the boundary between "literal
+statement" (5) and "supported with caveats" (3).
+
+**Root cause.** The system prompt's conviction rubric defines 5 as
+"unambiguous direct evidence" and adds "pick the lower number when
+uncertain." Sonnet 4.6 honours the second rule when there's no
+evidence (returns 1) and when there are explicit contradictions (the
+rubric caps at 3). It doesn't honour it on the **inferential
+boundary** — when *some* of the answer is literally stated and *some*
+is inferred, the model averages up to 5 rather than down to 3 or 4.
+
+This is a known LLM behaviour: when given a multi-part judgement
+("how confident are you in this answer?"), models tend to anchor on
+the strongest part rather than the weakest. The rubric needs to
+explicitly anchor on the weakest claim, not the strongest.
+
+**Fix (proposed; not applied).** Two complementary edits:
+
+1. Sharpen the rubric to require literal-statement support for 5:
+   *"5 requires that every load-bearing claim in the answer is
+   literally stated in a cited passage. If any part of the answer is
+   inferred or follows logically from the passages without being
+   stated, conviction caps at 4."*
+2. Add an explicit weakest-claim anchor:
+   *"Conviction is bounded by the weakest claim in the answer, not
+   the strongest. If your answer has three claims and one of them is
+   only weakly supported, the whole answer's conviction is the
+   weakest claim's conviction."*
+
+Optional third layer: a small self-check pass after the main
+synthesis call that scrutinises the conviction value against the
+rubric. Doubles cost; arguably worth it if calibration matters more
+than latency.
+
+**Lesson.** *Rubrics that work at the extremes can fail at the
+boundary.* Empirical testing across the 1-5 conviction scale showed
+the rubric works correctly when there's clearly no evidence (1) and
+clearly direct evidence (5 on a single direct quote), but fails on
+the mixed-inference cases that account for most real questions.
+"Pick the lower number when uncertain" isn't sharp enough — the
+model needs to be told **which dimension** to be uncertain along
+(the weakest claim), and **what threshold** distinguishes "stated"
+from "inferred".
+
+Prompt engineering at this level is the work of LLM applications.
+The strict-RAG schema and runtime checks catch *fabricated* citations
+and *empty* citations; they don't catch *over-confident* citations.
+That has to live in the prompt.
+
+---
+
+## Finding 21 — Dense-only retrieval misses rare-keyword queries
+
+**Symptom.** A query for *"what is the name of the conjuncatvitus
+spell?"* (typo deliberate) returned 10 candidates from
+`hybrid_search`, none of which contained the Conjunctivitis Curse.
+The synthesis agent correctly returned `conviction=1/5` with `gaps`
+listing the spells the passages *did* cover (Levicorpus, Mufflato,
+Imperius, etc.) and explicitly noting the absence.
+
+The Conjunctivitis Curse is in the corpus — it appears in *Goblet of
+Fire* chapters 19, 20, 23 (Krum's dragon attack, the First Task, the
+Yule Ball aftermath) and in *Order of the Phoenix* chapter 20
+(Hagrid's Tale). Retrieval missed all of it.
+
+**Root cause.** Three compounding reasons:
+
+1. **Query typo** — `conjuncatvitus` rather than `conjunctivitis`.
+   bge-large is somewhat robust to typos at the subword tokenizer
+   level, but not infinitely.
+2. **Phrasing mismatch** — the books describe Krum casting a curse
+   at the dragon's eyes; they don't repeatedly say "the
+   Conjunctivitis Spell." Dense embeddings match on semantic gist;
+   the gist of *"what is the name of the X spell"* doesn't strongly
+   resemble *"Krum sent a stream of red fire from his wand at the
+   dragon's eyes."*
+3. **Rare keyword vs dense compression** — *"conjunctivitis"*
+   appears maybe 4-5 times across 7 books. Dense embeddings
+   compress lexical signal away in favour of semantic gist. **This
+   is the textbook BM25 case**: a rare token has high IDF and
+   sparse retrieval would weight it heavily; dense retrieval treats
+   it as one feature among 1024.
+
+**Fix.** Add a sparse-vector retrieval path. Qdrant supports sparse
+vectors natively (BM25, SPLADE) and `query_points` accepts a
+`prefetch` list with multiple Prefetches plus a `FusionQuery` for
+server-side RRF. The architecture becomes:
+
+```
+hybrid_search:
+  paragraph_dense  → top_k via cosine
+  paragraph_sparse → top_k via BM25
+  chapter_dense    → top_k via cosine
+  chapter_sparse   → top_k via BM25
+  → RRF-merge all four lists
+```
+
+In practice the cleanest change is to add sparse vectors to the
+existing two collections and let Qdrant fuse server-side via its
+`prefetch + FusionQuery(fusion=RRF)` API. The sparse encoder can be
+`fastembed.SparseTextEmbedding(model_name="Qdrant/bm25")`.
+
+Cost estimate: ~half a day of work, ~5-10 minutes of re-embedding,
+no changes to the synthesis layer (it's downstream of retrieval and
+doesn't care which retriever produced a candidate).
+
+**Lesson.** *"Hybrid retrieval" is overloaded.* The paragraph+chapter
+fusion we built in Phase 4 is **granularity hybrid** — fusing two
+chunk sizes of the same modality. The conjunctivitis case shows we
+also need **modality hybrid** — dense + sparse. They solve different
+problems:
+
+- Granularity hybrid (current): chapters give breadth, paragraphs
+  give precision. Fixes the precision/recall trade-off within a
+  single retrieval modality.
+- Modality hybrid (missing): dense gives semantic match, sparse
+  gives rare-keyword match. Fixes the gist/lexical trade-off.
+
+Most production RAG systems do both. The lab now has a real reason
+to add the second layer — captured here as the artefact that proves
+the gap exists in our specific corpus.
+
+A meta-observation worth recording: **the strict-RAG architecture
+revealed a retrieval problem rather than masking it.** A pipeline
+that allowed parametric fallback would have answered "the
+Conjunctivitis Curse" confidently from training data, and we'd
+never have known the retrieval missed. Strict-RAG converts a silent
+retrieval failure into a visible "the passages don't cover this"
+gap. That's exactly what we want from the architecture — it makes
+weak retrieval **observable** rather than papered-over.
+
+---
+
 ## Pattern across these findings
 
 **The ones we caught by inspecting real output**, not by writing tests in
@@ -853,11 +1060,28 @@ signal vs use-the-author's-metadata (Finding 3), naive subset clustering
 (Finding 6), naive trust in NER classification on out-of-domain text
 (Finding 7), bytes-level equality across probabilistic boundaries
 (Finding 8), silent embedder truncation (Finding 17), silent vector-store
-indexing threshold (Finding 18). Ten findings, ten instances of "the
-default is wrong for this corpus / hardware / scale / domain." Not the
-libraries' fault — they're tuned for the median use case. The lesson
-is structural: every default in a data pipeline is a hidden assumption
-you should surface before relying on it.
+indexing threshold (Finding 18), dense-only retrieval blind to rare
+keywords (Finding 21). Eleven findings, eleven instances of "the default
+is wrong for this corpus / hardware / scale / domain." Not the libraries'
+fault — they're tuned for the median use case. The lesson is structural:
+every default in a data pipeline is a hidden assumption you should
+surface before relying on it.
+
+**The ones that surfaced from end-to-end testing of the full stack**:
+19, 20, 21. Phase 5 (synthesis) was the first time the entire pipeline
+ran together; F19 (a feared leak that hybrid retrieval prevented),
+F20 (conviction calibration anchoring high), and F21 (rare-keyword
+retrieval gap surfaced by strict-RAG, not papered over) all required
+the full stack to demonstrate. *Unit-tested layers can be individually
+correct and still produce composite failures only the integration
+reveals.*
+
+**The strict-RAG architecture's defensive value (Finding 21 in
+particular)**: a pipeline that allowed parametric fallback would have
+silently masked the retrieval gap. Strict-RAG converts silent
+retrieval failures into visible "passages don't cover this" gaps.
+This is the architectural equivalent of fail-fast: weak retrieval
+becomes **observable** instead of plausible-but-wrong.
 
 **Three findings (6, 7, 8) are specifically about probabilistic-model
 output**: coref errors, NER domain shift, NER/coref boundary
@@ -872,5 +1096,5 @@ lesson the lab surfaced.
 
 ---
 
-*Last updated: 2026-04-25*
+*Last updated: 2026-04-25 (Phase 5 verification: F19, F20, F21 added)*
 *Findings list grows as the lab progresses; entries are append-only.*
