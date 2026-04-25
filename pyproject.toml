@@ -28,7 +28,7 @@ dependencies = [
     "anthropic>=0.40.0",
 
     # ── Routing / observability ───────────────────────────────────
-    "litellm>=1.50.0",
+    "litellm[proxy]>=1.50.0",
 
     # ── Config / IO ───────────────────────────────────────────────
     "pydantic-settings>=2.1.0",

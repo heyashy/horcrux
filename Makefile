@@ -3,7 +3,7 @@
 # profile (~/.zshrc / ~/.bashrc) has been sourced in this session.
 export PATH := $(HOME)/.temporalio/bin:$(HOME)/.local/bin:$(PATH)
 
-.PHONY: help preflight local temporal proxy worker run ingest chapters chunks embed search doctor test integration-test smoke lint format
+.PHONY: help preflight local temporal proxy worker run ingest chapters chunks embed search answer doctor test integration-test smoke lint format
 
 # Default target — print available commands.
 help:
@@ -24,6 +24,7 @@ help:
 	@echo "    make chunks            Derive chunks.json from chapters + alias dict (gold tier)"
 	@echo "    make embed             Embed chunks and upsert into Qdrant (requires \`make local\`)"
 	@echo "    make search Q=\"...\"    Hybrid retrieval smoke (CHARS=\"slug,slug\" K=10 optional)"
+	@echo "    make answer Q=\"...\"    End-to-end retrieve + synthesise (requires \`make proxy\`)"
 	@echo "    make run Q=\"query\"     Run a single query end-to-end"
 	@echo ""
 	@echo "  Diagnostics & quality:"
@@ -99,6 +100,13 @@ search:
 		exit 1; \
 	fi
 	@uv run python scripts/search.py "$(Q)" --chars "$(CHARS)" --top-k $${K:-10}
+
+answer:
+	@if [ -z "$(Q)" ]; then \
+		echo "Usage: make answer Q=\"your question\" [CHARS=\"slug1,slug2\"] [K=10]"; \
+		exit 1; \
+	fi
+	@uv run python scripts/answer.py "$(Q)" --chars "$(CHARS)" --top-k $${K:-10}
 
 run:
 	@if [ -z "$(Q)" ]; then \

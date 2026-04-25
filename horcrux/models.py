@@ -90,6 +90,61 @@ class ScoredCandidate(BaseModel):
     characters: list[str] = Field(default_factory=list)
 
 
+# ── Phase 5 — synthesis ──────────────────────────────────────────
+
+
+class Finding(BaseModel):
+    """The synthesis agent's typed output.
+
+    Strict-RAG enforcement happens at three layers:
+      1. System prompt forbids parametric knowledge.
+      2. Schema: `source_ids` has min_length=1 — the model can't return
+         an answer with no citations and have it parse.
+      3. Runtime check (in `agents.synthesise`): every returned source_id
+         must exist in the candidate set passed to the agent. Catches
+         the case where the model invents a plausible-looking ID.
+
+    `conviction` is a 1-5 scale — see the system prompt for the rubric
+    embedded in the agent's instructions. Field descriptions here are
+    tool-schema-visible to the model and are part of the prompt surface.
+    """
+
+    answer: str = Field(
+        description=(
+            "Direct, complete answer to the user's question. Plain prose, "
+            "no markdown. Must be derivable from the provided passages alone."
+        ),
+    )
+    source_ids: list[str] = Field(
+        min_length=1,
+        description=(
+            "IDs of every passage that supports the answer. Use the exact "
+            "ID strings from the numbered context — never invent IDs."
+        ),
+    )
+    conviction: int = Field(
+        ge=1,
+        le=5,
+        description=(
+            "Confidence in the answer, 1-5. "
+            "5: unambiguous direct evidence in passages. "
+            "4: clearly implied by passages, no contradictions. "
+            "3: supported by passages but with caveats or partial coverage. "
+            "2: plausible from passages but significant gaps remain. "
+            "1: passages don't really answer this — say so in `gaps`. "
+            "When uncertain between two values, pick the lower number."
+        ),
+    )
+    gaps: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Any aspects of the question the passages don't cover, or "
+            "contradictions between passages. Empty list if no gaps. "
+            "Contradictions cap conviction at 3."
+        ),
+    )
+
+
 # ── Helpers ──────────────────────────────────────────────────────
 
 # Fixed namespace UUID for chunk ID derivation. Arbitrary but stable —
