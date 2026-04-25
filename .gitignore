@@ -1,0 +1,53 @@
+# ── Data lake (raw inputs) ────────────────────────────────────────
+# Track only the README explaining what goes here.
+data_lake/*
+!data_lake/README.md
+
+# ── Derived / generated data ──────────────────────────────────────
+# Never commit anything derived from copyrighted source material.
+*.pdf
+data/
+ocr_cache/
+chunks/
+qdrant_storage/             # Qdrant container volume
+horcrux.db                  # SQLite checkpointer state
+horcrux.db-journal
+horcrux.db-shm
+horcrux.db-wal
+
+# ── Models / caches ───────────────────────────────────────────────
+models/
+.cache/
+*.bin
+*.safetensors
+
+# ── Secrets / local config ────────────────────────────────────────
+.env
+.env.local
+.env.*.local
+litellm_config.local.yaml
+
+# ── Python ────────────────────────────────────────────────────────
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info/
+.venv/
+.python-version
+
+# ── Tooling caches ────────────────────────────────────────────────
+.ruff_cache/
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# ── Editor / OS ───────────────────────────────────────────────────
+.idea/
+.vscode/
+.DS_Store
+*.swp
+"Pasted image.png"
+Pasted*.png
