@@ -7,3 +7,4 @@
 | ADR-0003 | Interactive clarification via LangGraph interrupts                   | pending | 2026-04-25 |
 | ADR-0004 | Centralised config via pydantic-settings                             | pending | 2026-04-25 |
 | ADR-0005 | PDF outline as the chapter source of truth                           | pending | 2026-04-25 |
+| ADR-0006 | Three-tier character discovery (NER + fuzzy + coref + LLM + manual)  | pending | 2026-04-25 |

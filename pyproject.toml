@@ -12,6 +12,11 @@ dependencies = [
     "pillow>=10.0.0",
     "sentence-transformers>=3.0.0",
     "qdrant-client>=1.9.0",
+    "spacy>=3.7.0",                          # NER for character discovery (Tier 1a)
+    "en-core-web-sm",                        # spaCy English NER model — pinned via [tool.uv.sources]
+    "rapidfuzz>=3.0.0",                      # fuzzy string similarity for clustering
+    "fastcoref>=2.1.0",                      # transformer-based coref resolution (Tier 1b)
+    "transformers<4.50",                     # fastcoref incompat with 4.50+ (api rename) — bump when upstream catches up
 
     # ── Orchestration ─────────────────────────────────────────────
     "temporalio>=1.6.0",
@@ -38,6 +43,12 @@ dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.24.0",
 ]
+
+# spaCy models aren't on PyPI; they're hosted by Explosion as wheels on
+# GitHub releases. Pinning here means `uv sync` re-installs them rather
+# than pruning them as orphans.
+[tool.uv.sources]
+en-core-web-sm = { url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl" }
 
 [build-system]
 requires = ["hatchling"]

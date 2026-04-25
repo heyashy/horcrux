@@ -51,6 +51,12 @@ preflight:
 	@uv run python -c "import litellm" >/dev/null 2>&1 \
 		&& echo "  ✓ litellm (python pkg)" \
 		|| echo "  ✗ litellm        (run: uv sync)"
+	@uv run python -c "import spacy; spacy.load('en_core_web_sm')" >/dev/null 2>&1 \
+		&& echo "  ✓ spaCy en_core_web_sm" \
+		|| echo "  ✗ spaCy model    (run: uv run python -m spacy download en_core_web_sm)"
+	@uv run python -c "import fastcoref" >/dev/null 2>&1 \
+		&& echo "  ✓ fastcoref (python pkg)" \
+		|| echo "  ✗ fastcoref      (run: uv sync)"
 	@test -f .env \
 		&& echo "  ✓ .env file" \
 		|| echo "  ✗ .env file      (cp .env.example .env, then add a real ANTHROPIC_API_KEY)"

@@ -30,6 +30,42 @@ _CHAPTER_TITLE = re.compile(
 # TOC entry as PyMuPDF returns it: [level, title, page (1-indexed)]
 TocEntry = tuple[int, str, int]
 
+# Sentence-ending punctuation: if a page ends with one of these (possibly
+# followed by a closing quote), the next page is a real paragraph break.
+# Otherwise mid-sentence — join with a space, not `\n\n`.
+_SENTENCE_END = re.compile(r'[.!?][\'"”’]?\s*$')
+
+
+def _join_pages(page_texts: list[str]) -> str:
+    """Concatenate page texts in a structure-preserving way.
+
+    PDF page boundaries are layout artefacts, not semantic ones. A sentence
+    that spans pages 50→51 must remain one sentence to downstream sentence
+    segmentation, coref, and chunking.
+
+    Heuristic:
+      - Previous page ends with sentence-final punctuation → real paragraph
+        break (`\\n\\n`).
+      - Otherwise → mid-sentence continuation (single space).
+
+    Imperfect (we don't know real paragraph boundaries within a page) but
+    eliminates the worst case of fabricating a paragraph break in the
+    middle of a sentence.
+    """
+    if not page_texts:
+        return ""
+    parts: list[str] = [page_texts[0].strip()]
+    for text in page_texts[1:]:
+        text = text.strip()
+        if not text:
+            continue
+        prev = parts[-1] if parts else ""
+        if _SENTENCE_END.search(prev):
+            parts.append("\n\n" + text)
+        else:
+            parts.append(" " + text)
+    return "".join(parts)
+
 
 def _parse_chapter_title(title: str) -> tuple[int, str] | None:
     """Parse 'Chapter 5 - Diagon Alley' → (5, 'Diagon Alley')."""
@@ -88,11 +124,12 @@ def chapters_from_toc(
             else last_page
         )
 
-        chapter_text = "\n\n".join(
+        page_texts = [
             pages_by_num[p].text
             for p in range(page_start, page_end + 1)
             if p in pages_by_num and pages_by_num[p].text.strip()
-        )
+        ]
+        chapter_text = _join_pages(page_texts)
 
         # Skip chapters we have no OCR text for (partial OCR run)
         if not chapter_text:
