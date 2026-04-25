@@ -21,31 +21,28 @@ from rich.console import Console
 from horcrux.chapters import dump_chapters_json, extract_chapters
 from horcrux.cleansing import cleanse_pages
 from horcrux.config import settings
-from horcrux.models import RawPage
+from horcrux.models import Chapter, RawPage
+
+_RAW_PAGES_PATH = Path("data/processed/raw_pages.json")
+_CHAPTERS_OUTPUT_PATH = Path("data/processed/chapters.json")
 
 
-def main() -> None:
-    console = Console()
+def _load_pages(path: Path) -> list[RawPage] | None:
+    """Read OCR pages from disk. Returns None if the file isn't there."""
+    if not path.exists():
+        return None
+    return [RawPage(**p) for p in json.loads(path.read_text())]
 
-    raw_path = Path("data/processed/raw_pages.json")
-    if not raw_path.exists():
-        console.print(f"[red]missing:[/] {raw_path} — run `make ingest` first")
-        return
 
-    raw = json.loads(raw_path.read_text())
-    pages = [RawPage(**p) for p in raw]
-    console.print(f"[dim]loaded {len(pages)} pages from raw_pages.json[/]")
-
+def _build_chapters(pages: list[RawPage]) -> list[Chapter]:
+    """Cleanse pages and run chapter detection."""
     cleansed = cleanse_pages(pages)
-    chapters = extract_chapters(settings.corpus_path, cleansed)
-    console.print(f"[dim]extracted {len(chapters)} chapters[/]")
+    return extract_chapters(settings.corpus_path, cleansed)
 
-    output_path = Path("data/processed/chapters.json")
-    dump_chapters_json(chapters, settings.corpus_path, output_path)
 
-    # Summary by book — quick visual confirmation that the structure is sane.
+def _render_book_summary(console: Console, output_path: Path) -> None:
+    """Print one line per book — quick visual sanity check."""
     data = json.loads(output_path.read_text())
-    console.print()
     for book in data["books"]:
         chars_total = sum(len(c["text"]) for c in book["chapters"])
         console.print(
@@ -55,7 +52,23 @@ def main() -> None:
             f"{chars_total:,} chars"
         )
 
-    console.print(f"\n[green]saved[/] {output_path}")
+
+def main() -> None:
+    console = Console()
+
+    pages = _load_pages(_RAW_PAGES_PATH)
+    if pages is None:
+        console.print(f"[red]missing:[/] {_RAW_PAGES_PATH} — run `make ingest` first")
+        return
+    console.print(f"[dim]loaded {len(pages)} pages from {_RAW_PAGES_PATH.name}[/]")
+
+    chapters = _build_chapters(pages)
+    console.print(f"[dim]extracted {len(chapters)} chapters[/]")
+
+    dump_chapters_json(chapters, settings.corpus_path, _CHAPTERS_OUTPUT_PATH)
+    console.print()
+    _render_book_summary(console, _CHAPTERS_OUTPUT_PATH)
+    console.print(f"\n[green]saved[/] {_CHAPTERS_OUTPUT_PATH}")
 
 
 if __name__ == "__main__":
