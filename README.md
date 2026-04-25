@@ -74,6 +74,40 @@ Phase-by-phase walkthrough: [`docs/lab/toolchain-path.md`](docs/lab/toolchain-pa
 You will need a legally-obtained PDF of the corpus you want to research.
 **Nothing copyrighted is shipped with this repo.**
 
+### Prerequisites
+
+Five tools must be installed on the host before `uv sync` is useful — they're
+not Python packages.
+
+| Tool | Why | Install |
+|---|---|---|
+| **`uv`** | Python package manager (per CLAUDE.md). | <https://docs.astral.sh/uv/> |
+| **`docker`** | Runs the Qdrant container. | <https://docs.docker.com/engine/install/> |
+| **`tesseract`** | OCR engine for the ingest pipeline. | `apt install tesseract-ocr` (Ubuntu) · `brew install tesseract` (macOS) |
+| **`temporal`** | Bundled dev server (frontend + history + matching + visibility, all in one binary, SQLite-backed). | `curl -sSf https://temporal.download/cli.sh \| sh` — then add `~/.temporalio/bin` to PATH |
+| **`litellm`** | Model-routing proxy. Installed as a Python package by `uv sync` (no separate binary needed). | covered by `uv sync` |
+
+After installing, verify everything's wired:
+
+```bash
+make preflight
+```
+
+You should see green ticks for all six rows. The last is `.env` — see below.
+
+#### PATH setup for the Temporal CLI
+
+The `temporal.download/cli.sh` installer drops the binary at
+`~/.temporalio/bin/temporal` and may write a PATH line into `~/.bashrc` only.
+If you use zsh, add it explicitly:
+
+```bash
+echo 'export PATH="$PATH:$HOME/.temporalio/bin"' >> ~/.zshrc
+source ~/.zshrc
+```
+
+(Bash users: same line, in `~/.bashrc`.)
+
 ### One-time setup
 
 ```bash
@@ -82,13 +116,14 @@ uv sync
 
 # 2. Set secrets
 cp .env.example .env
-# Edit .env — add ANTHROPIC_API_KEY and LANGCHAIN_API_KEY
+# Edit .env — add ANTHROPIC_API_KEY and LANGSMITH__API_KEY
 
 # 3. Drop your corpus PDF into the data lake
 cp /path/to/your/corpus.pdf ./data_lake/corpus.pdf
 
-# 4. System dep
-sudo apt install tesseract-ocr      # or `brew install tesseract` on macOS
+# 4. Sanity check
+make preflight                 # all green?
+make test                      # 5 unit tests pass?
 ```
 
 ### Three terminals

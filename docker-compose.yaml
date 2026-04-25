@@ -1,0 +1,17 @@
+services:
+  qdrant:
+    image: qdrant/qdrant:v1.12.4
+    container_name: horcrux-qdrant
+    ports:
+      # Localhost-only — the lab should never be reachable from the LAN.
+      - "127.0.0.1:6333:6333"  # REST API + dashboard at http://localhost:6333/dashboard
+      - "127.0.0.1:6334:6334"  # gRPC — qdrant-client uses this by default
+    volumes:
+      # Named Docker volume — managed by Docker, opaque to the host filesystem.
+      # No permission issues, no root-owned files in your repo.
+      # Wipe via: docker compose down -v
+      - qdrant-data:/qdrant/storage
+    restart: unless-stopped
+
+volumes:
+  qdrant-data:

@@ -1,7 +1,7 @@
 # data_lake/
 
 Raw, unstructured source data for the lab. Treated as the system of record —
-everything in `data/`, `qdrant_storage/`, and the embeddings index is
+everything in `data/`, the Qdrant volume, and the embeddings index is
 *derivable* from what lives here.
 
 ## What goes here
@@ -22,5 +22,5 @@ empty until you populate it.
 It's the canonical term for raw, unstructured, source-of-truth data. The lab
 deliberately separates the lake (this folder — immutable inputs) from
 *derived* layers (OCR'd text, chunks, embeddings — all regeneratable). If the
-ingest pipeline corrupts itself, you delete `data/`, `qdrant_storage/`, and
+ingest pipeline corrupts itself, you delete `data/`, run `docker compose down -v` to wipe the Qdrant volume, delete
 `horcrux.db` and re-run; the lake is untouched.

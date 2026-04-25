@@ -21,25 +21,40 @@ This is the working journal for the lab. Read it linearly the first time. Each p
 
 **Setup**
 - `pyproject.toml` (Python 3.12, ruff config, deps).
-- `Makefile` with `run`, `local`, `test`, `lint`, `terraform-lint` targets — most are stubs at this stage.
-- `.env.example` (no real secrets).
-- `docker-compose.yaml` for Qdrant.
+- `Makefile` with `preflight`, `run`, `local`, `test`, `lint`, etc.
+- `.env.example` (no real secrets) → copy to `.env` and add a real `ANTHROPIC_API_KEY`.
+- `docker-compose.yaml` for Qdrant (named volume — no host filesystem state).
 - `scripts/temporal-dev.sh` — wraps `temporal server start-dev`.
-- Empty `horcrux/` package.
+- `litellm_config.yaml` — model aliases.
+- `horcrux/__init__.py` and `horcrux/config.py` — the typed config singleton.
+- `tests/conftest.py` + `tests/unit/test_config.py` — smoke tests for the singleton.
+
+**Pre-flight (host-side tools)**
+Five tools must exist on PATH before `uv sync` is useful: `uv`, `docker`, `tesseract`, `temporal` (the CLI binary, separate from the `temporalio` Python SDK), and `litellm` (covered by `uv sync` once the Python deps install).
+
+```bash
+make preflight
+```
+
+prints a tick or cross for each. Fix any crosses, then:
 
 **Walkthrough**
-1. `uv sync` — installs dependencies.
-2. `make local` — brings up Qdrant via docker-compose.
-3. `scripts/temporal-dev.sh` — starts the Temporal dev server in another terminal.
-4. Open `localhost:6333/dashboard` (Qdrant) and `localhost:8233` (Temporal). Both empty.
+1. `cp .env.example .env` and put a real (or stub) `ANTHROPIC_API_KEY` in.
+2. `uv sync` — installs Python deps.
+3. `make test` — 5 unit tests on the config singleton; should be green.
+4. `make local` — brings up Qdrant via docker-compose.
+5. `make temporal` (in another terminal) — Temporal dev server.
+6. `make proxy` (in a third terminal) — LiteLLM proxy.
+7. Open `localhost:6333/dashboard` (Qdrant), `localhost:8233` (Temporal), `localhost:4000/ui` (LiteLLM). All three empty — that's correct.
 
 **Exercise**
-- `make lint` and `make test` both green on an empty project.
-- Click around both UIs. They're empty — that's correct. Note where collections will land in Qdrant, where workflows will land in Temporal.
+- `make lint` and `make test` both green.
+- `make doctor` prints the resolved config with `anthropic_api_key` masked as `"**********"`.
+- Click around all three UIs. They're empty — that's correct. Note where collections will land in Qdrant, where workflows will land in Temporal, where calls will land in LiteLLM.
 
 **Gotchas**
 - Temporal dev server is a single binary; production Temporal needs a Postgres + Cassandra cluster. The dev server is in-memory — restart it and event history is gone. Fine for the lab.
-- Qdrant's docker-compose volume should map to a *gitignored* path (`./qdrant_storage`) so we don't accidentally commit indexed corpus chunks.
+- Qdrant's docker-compose uses a *named volume* (`qdrant-data`) rather than a host bind mount. Docker manages the storage; we never see it on the host filesystem. Wipe via `docker compose down -v`.
 
 **Got it** — the environment is reproducible, and you know where each service's UI lives before any code points at it.
 

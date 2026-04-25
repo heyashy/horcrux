@@ -241,12 +241,19 @@ One obvious entry point per surface: `horcrux.main` (CLI), `horcrux.worker` (Tem
 
 ```
 Terminal 1:  make local                 # docker compose up — Qdrant on :6333
-Terminal 2:  scripts/temporal-dev.sh    # Temporal dev server on :7233 (UI :8233)
-Terminal 3:  litellm --config litellm_config.yaml --port 4000
+Terminal 2:  make temporal              # Temporal dev server on :7233 (UI :8233)
+Terminal 3:  make proxy                 # LiteLLM proxy on :4000 (UI :4000/ui)
 ```
 
-Then a fourth for the worker (`uv run python -m horcrux.worker`) and a fifth
-to invoke queries (`uv run python -m horcrux.main "..."`).
+Then a fourth for the worker (`make worker`) and a fifth to invoke queries
+(`make run Q="..."`).
+
+### Required system tools (not installed by `uv sync`)
+
+`uv`, `docker`, `tesseract`, `temporal` (CLI binary). `make preflight`
+checks all of these and `.env` presence in one shot. See README.md for
+install commands. The Temporal CLI installer's default PATH line writes
+to `~/.bashrc` — zsh users need to add it to `~/.zshrc` explicitly.
 
 ---
 

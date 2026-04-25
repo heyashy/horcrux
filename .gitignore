@@ -9,7 +9,6 @@ data_lake/*
 data/
 ocr_cache/
 chunks/
-qdrant_storage/             # Qdrant container volume
 horcrux.db                  # SQLite checkpointer state
 horcrux.db-journal
 horcrux.db-shm

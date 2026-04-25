@@ -1,0 +1,32 @@
+# LiteLLM proxy config.
+#   Run with: litellm --config litellm_config.yaml --port 4000
+#   UI:       http://localhost:4000/ui
+#
+# Aliases (model_name) are what application code asks for via PydanticAI.
+# Provider strings (litellm_params.model) are what the proxy forwards to.
+# Swapping a model is one-line edit + proxy restart. No application code change.
+
+model_list:
+  - model_name: haiku
+    litellm_params:
+      model: anthropic/claude-haiku-4-5-20251001
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+  - model_name: sonnet
+    litellm_params:
+      model: anthropic/claude-sonnet-4-6
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+litellm_settings:
+  # In-memory response cache scoped to the proxy process — second identical
+  # call is a cache hit. Cleared on proxy restart.
+  cache: true
+  cache_params:
+    type: local
+
+  # Verbose mode is noisy; turn on temporarily when debugging.
+  set_verbose: false
+
+  # Drop request params LiteLLM doesn't recognise rather than 4xx-ing.
+  # Keeps Anthropic-specific params (cache_control, etc.) flowing through.
+  drop_params: true
