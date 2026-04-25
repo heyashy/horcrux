@@ -30,6 +30,9 @@ dependencies = [
     # ── Routing / observability ───────────────────────────────────
     "litellm[proxy]>=1.50.0",
 
+    # ── Retrieval ─────────────────────────────────────────────────
+    "rank-bm25>=0.2.2",                      # in-memory BM25; corpus is small enough (~17MB raw)
+
     # ── Config / IO ───────────────────────────────────────────────
     "pydantic-settings>=2.1.0",
     "httpx>=0.27.0",

@@ -977,28 +977,45 @@ Yule Ball aftermath) and in *Order of the Phoenix* chapter 20
    sparse retrieval would weight it heavily; dense retrieval treats
    it as one feature among 1024.
 
-**Fix.** Add a sparse-vector retrieval path. Qdrant supports sparse
-vectors natively (BM25, SPLADE) and `query_points` accepts a
-`prefetch` list with multiple Prefetches plus a `FusionQuery` for
-server-side RRF. The architecture becomes:
+**Fix (applied).** Added a BM25 retrieval path. Two implementation
+choices were available:
+
+1. **Qdrant native sparse vectors** — supported via `prefetch` +
+   `FusionQuery(fusion=RRF)`. Schema migration needed (named-vector
+   collections), re-embed with both dense and sparse encoders,
+   server-side fusion. Right answer at scale.
+2. **In-memory BM25** via `rank-bm25` — load chunks.json once at
+   process start, build two `BM25Index` instances (paragraph + chapter),
+   ~1s build cost, ~6ms per query. No schema migration, no second
+   datastore, no re-embed. Right answer at *this* scale.
+
+We picked (2). The corpus is 17MB of raw text and ~5,500 chunks; an
+in-memory BM25 index fits in tens of MB and out-paces Qdrant's
+sparse-vector path purely on round-trip overhead. The lab's vector-DB
+is no longer doing both modalities — Qdrant remains for dense ANN, an
+in-memory index handles BM25. See ADR-0008 for why this choice fits
+the lab specifically and would not generalise to production scale.
+
+Architecture after the fix:
 
 ```
-hybrid_search:
-  paragraph_dense  → top_k via cosine
-  paragraph_sparse → top_k via BM25
-  chapter_dense    → top_k via cosine
-  chapter_sparse   → top_k via BM25
-  → RRF-merge all four lists
+hybrid_search (LangGraph state machine):
+  ─ paragraph_dense  (Qdrant ANN)        ┐
+  ─ chapter_dense    (Qdrant ANN)        ├──> RRF fuse ──> top_k
+  ─ paragraph_bm25   (in-memory rank-bm25)
+  ─ chapter_bm25     (in-memory rank-bm25)─┘
 ```
 
-In practice the cleanest change is to add sparse vectors to the
-existing two collections and let Qdrant fuse server-side via its
-`prefetch + FusionQuery(fusion=RRF)` API. The sparse encoder can be
-`fastembed.SparseTextEmbedding(model_name="Qdrant/bm25")`.
+Four parallel retrievers fanning out from `START`, converging on a
+fuse node. `horcrux/retrieval_graph.py` holds the state machine;
+`horcrux/bm25.py` holds the index. Synthesis is unchanged — it consumes
+ScoredCandidates regardless of which retriever produced them.
 
-Cost estimate: ~half a day of work, ~5-10 minutes of re-embedding,
-no changes to the synthesis layer (it's downstream of retrieval and
-doesn't care which retriever produced a candidate).
+Verification on the original failing query — the literal text
+*"...I was going to suggest a Conjunctivitis Curse, as a dragon's
+eyes are its weakest point — 'That's what Krum did!' Hermione
+whispered..."* (B4.C23 The Yule Ball) now appears in the synthesis
+candidate set. Strict-RAG can ground from it.
 
 **Lesson.** *"Hybrid retrieval" is overloaded.* The paragraph+chapter
 fusion we built in Phase 4 is **granularity hybrid** — fusing two
@@ -1006,15 +1023,18 @@ chunk sizes of the same modality. The conjunctivitis case shows we
 also need **modality hybrid** — dense + sparse. They solve different
 problems:
 
-- Granularity hybrid (current): chapters give breadth, paragraphs
-  give precision. Fixes the precision/recall trade-off within a
-  single retrieval modality.
-- Modality hybrid (missing): dense gives semantic match, sparse
-  gives rare-keyword match. Fixes the gist/lexical trade-off.
+- Granularity hybrid: chapters give breadth, paragraphs give
+  precision. Fixes the precision/recall trade-off within a single
+  retrieval modality.
+- Modality hybrid (now also done): dense gives semantic match, sparse
+  (BM25) gives rare-keyword match. Fixes the gist/lexical trade-off.
 
-Most production RAG systems do both. The lab now has a real reason
-to add the second layer — captured here as the artefact that proves
-the gap exists in our specific corpus.
+Most production RAG systems do both. The lab now does both. Composing
+the two as a **four-way fusion** (paragraph_dense × paragraph_bm25 ×
+chapter_dense × chapter_bm25) was the natural shape — and a clean fit
+for LangGraph, which is why `hybrid_search` now lives as a state machine
+rather than as a flat async function. The four retrievers fan out from
+START, run in parallel, converge on a fuse node, RRF-merge.
 
 A meta-observation worth recording: **the strict-RAG architecture
 revealed a retrieval problem rather than masking it.** A pipeline
@@ -1096,5 +1116,5 @@ lesson the lab surfaced.
 
 ---
 
-*Last updated: 2026-04-25 (Phase 5 verification: F19, F20, F21 added)*
+*Last updated: 2026-04-25 (Phase 5 verification: F19, F20, F21 added; F21 fixed via in-memory BM25 + LangGraph fusion)*
 *Findings list grows as the lab progresses; entries are append-only.*

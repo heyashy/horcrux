@@ -133,6 +133,41 @@ the lab's tool inventory. For production with an existing Postgres
 stack and modest vector needs, pgvector deserves a serious look before
 adding either Qdrant or OpenSearch as a new piece of infrastructure.
 
+### Qdrant native sparse vectors (for the BM25 layer specifically)
+
+When Finding 21 surfaced — dense-only retrieval missing rare-keyword
+queries — the immediate choice was *how to add BM25*. Two paths:
+
+1. **Qdrant native sparse vectors** with server-side
+   `prefetch + FusionQuery(fusion=RRF)`. This is what a production
+   system at scale would do. It requires migrating to named-vector
+   collections (dense + sparse per point), re-encoding with a sparse
+   model (e.g. `fastembed.SparseTextEmbedding(model_name="Qdrant/bm25")`),
+   and re-upserting the corpus.
+2. **In-memory BM25** via `rank-bm25` over `chunks.json`. ~17MB of raw
+   text, ~5,500 chunks, ~1s build cost on process start, ~6ms per
+   query. No schema migration, no second encoder, no re-embed.
+
+We picked (2). At lab scale, in-memory BM25 wins on round-trip overhead
+alone (a Qdrant gRPC call costs more than a full BM25 scan over 5,500
+chunks). The decision generalises to any small-corpus RAG system: if
+your corpus fits in RAM, an in-memory BM25 index is genuinely the right
+answer over any networked sparse-vector path.
+
+The choice does *not* generalise to production:
+
+- Past ~50k–100k chunks the in-memory scan starts costing real time
+  (linear in corpus size).
+- Memory grows with corpus and you lose the "rebuild on startup" model.
+- No persistence, no multi-process sharing, no incremental updates.
+
+For production, the recommendation in the table above stands —
+OpenSearch BM25 if OpenSearch is in the stack; Qdrant native sparse if
+you're committed to Qdrant; full-text search in Postgres if you're
+small enough for pgvector. The lab demonstrates the *shape* of
+modality hybrid retrieval (dense + sparse + RRF fusion) without
+committing to a specific scaling story for either side.
+
 ## Consequences
 
 ### What this lab demonstrates

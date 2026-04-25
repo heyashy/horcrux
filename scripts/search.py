@@ -23,7 +23,7 @@ from rich.panel import Panel
 from rich.rule import Rule
 
 from horcrux.ingest import get_client
-from horcrux.retrieval import hybrid_search
+from horcrux.retrieval_graph import hybrid_search
 
 # Suppress the qdrant-client / server version-mismatch warning.
 # Lab is locked to 1.12.4 server; client moves faster — known divergence.

@@ -23,7 +23,7 @@ from rich.rule import Rule
 from horcrux.agents import synthesise
 from horcrux.ingest import get_client
 from horcrux.models import Finding, ScoredCandidate
-from horcrux.retrieval import hybrid_search
+from horcrux.retrieval_graph import hybrid_search
 
 warnings.filterwarnings("ignore", category=UserWarning, module="qdrant_client")
 

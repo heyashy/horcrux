@@ -1,8 +1,10 @@
-"""Retrieval over the two Qdrant collections.
+"""Retrieval primitives — dense ANN over Qdrant, BM25 over an in-memory
+index, and Reciprocal Rank Fusion over their outputs.
 
-Built up incrementally — at this stage we only have paragraph search.
-Chapter search and RRF fusion land in the next steps; keeping the surface
-small lets us verify each layer against live Qdrant before composing.
+Composition (the `hybrid_search` four-way fusion) lives in
+`retrieval_graph.py` as a LangGraph state machine. This module holds the
+leaf functions: each one produces a ranked list of `ScoredCandidate`
+from a single retriever (one collection x one modality).
 
 Design choices worth flagging:
 
@@ -13,28 +15,41 @@ Design choices worth flagging:
    behind a typed wrapper that callers can't bypass.
 
 2. **`character_filter` is explicit, not auto-derived.** The eventual
-   query pipeline (Phase 5) will run NER on the query and resolve to
-   slug IDs. For now we keep the retrieval layer pure: take a list of
-   slugs, filter on the indexed `characters` payload field, return.
-   Easier to test, easier to debug.
+   query pipeline (next phase) will run NER on the query and resolve
+   to slug IDs. For now retrieval stays pure: take a list of slugs,
+   apply, return.
 
-3. **Returns `ScoredCandidate`, not raw Qdrant points.** The model is
-   the contract between retrieval and downstream consumers (synthesis
-   agent, Rich renderer). Everything pulled out of Qdrant gets validated
-   on the way out.
+3. **BM25 character filter is a post-pass, not a pre-pass.** Pre-filtering
+   would mean rebuilding the BM25 index per query (because IDF depends
+   on the corpus). Post-filtering means we pull a generous top_k and
+   drop hits that don't carry any of the requested characters. Cheap;
+   the only cost is over-fetching.
+
+4. **Returns `ScoredCandidate`, not raw retriever outputs.** The model
+   is the contract between retrieval and downstream consumers
+   (synthesis agent, Rich renderer, RRF). Everything gets validated on
+   the way out.
 """
 
-import asyncio
 from typing import Literal
 
 from qdrant_client import QdrantClient
 from qdrant_client.models import FieldCondition, Filter, MatchAny
 
+from horcrux.bm25 import BM25Index, get_chapter_index, get_paragraph_index
 from horcrux.config import settings
 from horcrux.embedding import encode_query
 from horcrux.models import ScoredCandidate
 
 _Source = Literal["chapter", "paragraph"]
+
+# When BM25 character-filtering is requested, pull this multiple of top_k
+# from the index so the post-filter still has enough hits left after
+# dropping non-matching candidates. Tuned empirically for our corpus
+# (5,377 paragraphs, character tags on 99% of chunks). If a queried
+# character is rare, raise this — but don't make it unbounded; we
+# don't want to scan the whole index for every query.
+_BM25_OVERFETCH_FACTOR = 4
 
 # RRF constant. 60 is the original Cormack-et-al value and remains the
 # defensible default — small k weights top ranks more heavily, large k
@@ -157,6 +172,84 @@ def search_chapters(
     )
 
 
+# ── BM25 search ───────────────────────────────────────────────────
+
+
+def _filter_by_characters(
+    candidates: list[ScoredCandidate],
+    character_ids: list[str] | None,
+    *,
+    top_k: int,
+) -> list[ScoredCandidate]:
+    """Post-pass character filter for BM25 results.
+
+    Dense search filters server-side via Qdrant's payload index; BM25
+    runs against the full in-memory corpus and filters here instead.
+    Same observable semantics: a hit is kept iff its payload `characters`
+    set intersects `character_ids`.
+    """
+    if not character_ids:
+        return candidates[:top_k]
+    requested = set(character_ids)
+    return [c for c in candidates if requested.intersection(c.characters)][:top_k]
+
+
+def _bm25_search(
+    index: BM25Index,
+    query: str,
+    source: _Source,
+    *,
+    top_k: int,
+    character_filter: list[str] | None,
+) -> list[ScoredCandidate]:
+    """Shared BM25 entry: over-fetch when filtering, then post-filter."""
+    fetch_k = top_k * _BM25_OVERFETCH_FACTOR if character_filter else top_k
+    raw = index.search(query, top_k=fetch_k, source=source)
+    return _filter_by_characters(raw, character_filter, top_k=top_k)
+
+
+def search_paragraphs_bm25(
+    query: str,
+    *,
+    top_k: int = 10,
+    character_filter: list[str] | None = None,
+) -> list[ScoredCandidate]:
+    """BM25 search over the in-memory paragraph index.
+
+    Counterpart to `search_paragraphs` — same return shape, different
+    retriever. Solves the rare-keyword case dense embeddings miss
+    (Finding 21).
+    """
+    return _bm25_search(
+        get_paragraph_index(),
+        query,
+        "paragraph",
+        top_k=top_k,
+        character_filter=character_filter,
+    )
+
+
+def search_chapters_bm25(
+    query: str,
+    *,
+    top_k: int = 5,
+    character_filter: list[str] | None = None,
+) -> list[ScoredCandidate]:
+    """BM25 search over the in-memory chapter index. See
+    `search_paragraphs_bm25` for the rationale.
+    """
+    return _bm25_search(
+        get_chapter_index(),
+        query,
+        "chapter",
+        top_k=top_k,
+        character_filter=character_filter,
+    )
+
+
+# ── Fusion ────────────────────────────────────────────────────────
+
+
 def reciprocal_rank_fusion(
     ranked_lists: list[list[ScoredCandidate]],
     *,
@@ -194,44 +287,3 @@ def reciprocal_rank_fusion(
         fused.append(rep.model_copy(update={"score": rrf}))
 
     return fused[:top_k]
-
-
-async def hybrid_search(  # noqa: PLR0913 — three independent k-knobs + filter
-    client: QdrantClient,
-    query: str,
-    *,
-    paragraph_k: int = 20,
-    chapter_k: int = 5,
-    top_k: int = 10,
-    character_filter: list[str] | None = None,
-) -> list[ScoredCandidate]:
-    """Retrieve from both collections in parallel and fuse via RRF.
-
-    Defaults are skewed: pull more paragraphs (20) than chapters (5)
-    because paragraphs are where the precise evidence lives. Chapters
-    contribute breadth — they get into the fused result via the RRF
-    bonus when they happen to share characters / topic with paragraphs
-    that already ranked.
-
-    Runs as a coroutine because the long-term plan is to dispatch other
-    parallel work alongside it (e.g. BM25 sparse retrieval, query
-    rewriting). For now it's two awaits in `asyncio.gather`; the shape
-    is what matters.
-    """
-    paragraphs, chapters = await asyncio.gather(
-        asyncio.to_thread(
-            search_paragraphs,
-            client,
-            query,
-            top_k=paragraph_k,
-            character_filter=character_filter,
-        ),
-        asyncio.to_thread(
-            search_chapters,
-            client,
-            query,
-            top_k=chapter_k,
-            character_filter=character_filter,
-        ),
-    )
-    return reciprocal_rank_fusion([paragraphs, chapters], top_k=top_k)
