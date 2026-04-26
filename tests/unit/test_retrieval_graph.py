@@ -5,8 +5,8 @@ post-filter without standing up Qdrant or BM25 indexes.
 import pytest
 
 from horcrux.models import ScoredCandidate
-from horcrux.retrieval import _filter_by_characters
-from horcrux.retrieval_graph import _fuse_node
+from horcrux.retrieval.graph import _fuse_node
+from horcrux.retrieval.search import _filter_by_characters
 
 pytestmark = pytest.mark.unit
 

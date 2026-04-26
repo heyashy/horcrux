@@ -18,9 +18,9 @@ from pathlib import Path
 
 from rich.console import Console
 
-from horcrux.chapters import dump_chapters_json, extract_chapters
-from horcrux.cleansing import cleanse_pages
 from horcrux.config import settings
+from horcrux.corpus.chapters import dump_chapters_json, extract_chapters
+from horcrux.corpus.cleansing import cleanse_pages
 from horcrux.models import Chapter, RawPage
 
 _RAW_PAGES_PATH = Path("data/processed/raw_pages.json")

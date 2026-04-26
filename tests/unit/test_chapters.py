@@ -2,7 +2,7 @@
 
 import pytest
 
-from horcrux.chapters import _parse_chapter_title, chapters_from_toc
+from horcrux.corpus.chapters import _parse_chapter_title, chapters_from_toc
 from horcrux.models import RawPage
 
 pytestmark = pytest.mark.unit

@@ -9,8 +9,8 @@ import pytest
 from pydantic import ValidationError
 from pydantic_ai.models.test import TestModel
 
-from horcrux import agents
-from horcrux.agents import (
+from horcrux.agents import synthesis as _synthesis_module
+from horcrux.agents.synthesis import (
     _CHAPTER_SNIPPET_WORDS,
     _format_context,
     _truncate_for_synthesis,
@@ -149,7 +149,7 @@ async def test_synthesise_rejects_fabricated_source_id():
     )
     test_model = TestModel(custom_output_args=fake_finding)
 
-    agent = agents._synthesis_agent()
+    agent = _synthesis_module._synthesis_agent()
     with agent.override(model=test_model):  # noqa: SIM117
         with pytest.raises(ValueError, match="not in"):
             await synthesise("any question", cands)
@@ -167,7 +167,7 @@ async def test_synthesise_rejects_non_numeric_source_id():
     )
     test_model = TestModel(custom_output_args=fake_finding)
 
-    agent = agents._synthesis_agent()
+    agent = _synthesis_module._synthesis_agent()
     with agent.override(model=test_model):  # noqa: SIM117
         with pytest.raises(ValueError, match="not in"):
             await synthesise("any question", cands)
@@ -181,7 +181,7 @@ async def test_synthesise_translates_numbers_to_real_ids():
     finding = Finding(answer="x", source_ids=["2"], conviction=4)
     test_model = TestModel(custom_output_args=finding)
 
-    agent = agents._synthesis_agent()
+    agent = _synthesis_module._synthesis_agent()
     with agent.override(model=test_model):
         out = await synthesise("any question", cands)
     assert out.source_ids == ["id-2"]
@@ -194,7 +194,7 @@ async def test_synthesise_handles_bracketed_citation_form():
     finding = Finding(answer="x", source_ids=["[1]"], conviction=4)
     test_model = TestModel(custom_output_args=finding)
 
-    agent = agents._synthesis_agent()
+    agent = _synthesis_module._synthesis_agent()
     with agent.override(model=test_model):
         out = await synthesise("any question", cands)
     assert out.source_ids == ["only-id"]
@@ -210,7 +210,7 @@ async def test_synthesise_passes_through_valid_finding():
     )
     test_model = TestModel(custom_output_args=finding)
 
-    agent = agents._synthesis_agent()
+    agent = _synthesis_module._synthesis_agent()
     with agent.override(model=test_model):
         out = await synthesise("Why does Ollivander say that?", cands)
     assert out.answer == "The wand chooses the wizard."

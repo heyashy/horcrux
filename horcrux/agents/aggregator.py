@@ -29,7 +29,7 @@ from pydantic_ai import Agent
 from pydantic_ai.models.openai import OpenAIModel
 from pydantic_ai.providers.openai import OpenAIProvider
 
-from horcrux.agents import _resolve_citations, _truncate_for_synthesis
+from horcrux.agents.synthesis import _resolve_citations, _truncate_for_synthesis
 from horcrux.config import settings
 from horcrux.models import Finding, ScoredCandidate, SubFinding
 

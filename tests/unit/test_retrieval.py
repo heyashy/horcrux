@@ -7,7 +7,7 @@ import pytest
 from qdrant_client.models import Filter
 
 from horcrux.models import ScoredCandidate
-from horcrux.retrieval import _build_character_filter, reciprocal_rank_fusion
+from horcrux.retrieval.search import _build_character_filter, reciprocal_rank_fusion
 
 pytestmark = pytest.mark.unit
 

@@ -9,7 +9,7 @@ sentence-transformers.
 import numpy as np
 import pytest
 
-from horcrux.chunking import chunk_chapter, chunk_chapter_text, split_sentences
+from horcrux.corpus.chunking import chunk_chapter, chunk_chapter_text, split_sentences
 from horcrux.models import Chapter
 
 pytestmark = pytest.mark.unit

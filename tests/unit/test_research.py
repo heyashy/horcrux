@@ -7,9 +7,10 @@ import pytest
 from pydantic import ValidationError
 from pydantic_ai.models.test import TestModel
 
-from horcrux import aggregator as aggregator_mod
-from horcrux import planner as planner_mod
-from horcrux.aggregator import _merge_candidates, aggregate_subfindings
+from horcrux.agents import aggregator as aggregator_mod
+from horcrux.agents import planner as planner_mod
+from horcrux.agents.aggregator import _merge_candidates, aggregate_subfindings
+from horcrux.agents.planner import plan_query
 from horcrux.models import (
     Finding,
     Plan,
@@ -17,7 +18,6 @@ from horcrux.models import (
     ScoredCandidate,
     SubFinding,
 )
-from horcrux.planner import plan_query
 
 pytestmark = pytest.mark.unit
 

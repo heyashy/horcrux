@@ -6,12 +6,11 @@ extraction logic, both of which are pure functions over synthetic input.
 """
 
 from collections import Counter
+from unittest.mock import MagicMock
 
 import pytest
 
-from unittest.mock import MagicMock
-
-from horcrux.characters import (
+from horcrux.corpus.characters import (
     _is_alias_candidate,
     _is_alias_pair,
     _is_meaningful_mention,

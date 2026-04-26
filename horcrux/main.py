@@ -18,8 +18,8 @@ from rich.console import Console
 from rich.logging import RichHandler
 
 from horcrux.config import settings
+from horcrux.corpus.ocr import ocr_pages
 from horcrux.models import RawPage
-from horcrux.ocr import ocr_pages
 
 console = Console()
 

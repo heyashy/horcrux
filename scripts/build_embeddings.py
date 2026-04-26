@@ -22,9 +22,9 @@ from qdrant_client import QdrantClient
 from rich.console import Console
 
 from horcrux.config import settings
-from horcrux.embedding import encode_chunks
-from horcrux.ingest import ensure_collection, get_client, upsert_chunks
+from horcrux.corpus.embedding import encode_chunks
 from horcrux.models import ChapterChunk
+from horcrux.retrieval.store import ensure_collection, get_client, upsert_chunks
 
 _CHUNKS_PATH = Path("data/processed/chunks.json")
 

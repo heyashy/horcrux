@@ -5,7 +5,7 @@ is deterministic and decoupled from the gold-tier artefact.
 
 import pytest
 
-from horcrux.query_rewrite import correct_query
+from horcrux.retrieval.query_rewrite import correct_query
 
 pytestmark = pytest.mark.unit
 

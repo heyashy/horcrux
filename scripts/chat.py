@@ -30,11 +30,11 @@ from rich.prompt import Prompt
 from rich.rule import Rule
 
 from horcrux.agents import synthesise_with_history
-from horcrux.conversation import ChatSession, Turn
+from horcrux.chat.session import ChatSession, Turn
 from horcrux.models import ResearchReport
-from horcrux.research_graph import _compiled_graph as _research_graph
-from horcrux.research_renderer import StreamingRenderer, render_report
-from horcrux.retrieval_graph import hybrid_search
+from horcrux.research.graph import _compiled_graph as _research_graph
+from horcrux.research.renderer import StreamingRenderer, render_report
+from horcrux.retrieval.graph import hybrid_search
 
 warnings.filterwarnings("ignore", category=UserWarning, module="qdrant_client")
 

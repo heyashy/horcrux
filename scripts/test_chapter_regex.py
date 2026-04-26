@@ -1,8 +1,9 @@
+import io
+import re
+
 import pymupdf
 import pytesseract
 from PIL import Image
-import io
-import re
 
 doc = pymupdf.open("data_lake/corpus.pdf")
 

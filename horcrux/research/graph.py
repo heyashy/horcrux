@@ -43,7 +43,8 @@ from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Send
 
 from horcrux.agents import synthesise_with_history
-from horcrux.aggregator import aggregate_subfindings
+from horcrux.agents.aggregator import aggregate_subfindings
+from horcrux.agents.planner import plan_query
 from horcrux.models import (
     Finding,
     Plan,
@@ -51,8 +52,7 @@ from horcrux.models import (
     ScoredCandidate,
     SubFinding,
 )
-from horcrux.planner import plan_query
-from horcrux.retrieval_graph import hybrid_search
+from horcrux.retrieval.graph import hybrid_search
 
 
 class ResearchState(TypedDict, total=False):

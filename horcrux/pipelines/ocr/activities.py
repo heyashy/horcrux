@@ -20,7 +20,7 @@ from pathlib import Path
 import pymupdf
 from temporalio import activity
 
-from horcrux.ocr import ocr_pages
+from horcrux.corpus.ocr import ocr_pages
 
 _BATCH_DIR = Path("data/processed/raw_pages_batches")
 _FINAL_PATH = Path("data/processed/raw_pages.json")

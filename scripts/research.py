@@ -16,8 +16,8 @@ import warnings
 from rich.console import Console
 from rich.panel import Panel
 
-from horcrux.research_graph import _compiled_graph
-from horcrux.research_renderer import StreamingRenderer
+from horcrux.research.graph import _compiled_graph
+from horcrux.research.renderer import StreamingRenderer
 
 warnings.filterwarnings("ignore", category=UserWarning, module="qdrant_client")
 

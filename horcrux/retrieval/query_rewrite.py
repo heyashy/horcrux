@@ -25,7 +25,7 @@ from functools import lru_cache
 
 from rapidfuzz import fuzz, process
 
-from horcrux.bm25 import _CHUNKS_PATH, _load_chunks, _tokenize
+from horcrux.retrieval.bm25 import _CHUNKS_PATH, _load_chunks, _tokenize
 
 # Tokens shorter than this aren't fuzzy-corrected. Short tokens have too
 # many false-positive neighbours in vocab ("the" / "they" / "them" all

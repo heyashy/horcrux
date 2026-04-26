@@ -29,11 +29,11 @@ log = logging.getLogger("temporal-demo")
 
 async def main() -> None:
     # Import inside main so any sandbox-sensitive setup happens first.
+    from temporal_demo_workflow import DemoWorkflow, slow_step
     from temporalio.client import Client
     from temporalio.worker import Worker
 
     from horcrux.config import settings
-    from temporal_demo_workflow import DemoWorkflow, slow_step
 
     client = await Client.connect(
         settings.temporal.address,

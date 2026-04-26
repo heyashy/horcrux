@@ -29,10 +29,10 @@ from rich.progress import (
     TimeRemainingColumn,
 )
 
-from horcrux.chapters import load_chapters_json
-from horcrux.characters import extract_characters
-from horcrux.chunking import chunk_chapter
 from horcrux.config import settings
+from horcrux.corpus.chapters import load_chapters_json
+from horcrux.corpus.characters import extract_characters
+from horcrux.corpus.chunking import chunk_chapter
 from horcrux.models import Chapter, ChapterChunk
 
 _CHAPTERS_PATH = Path("data/processed/chapters.json")

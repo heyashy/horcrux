@@ -3,7 +3,7 @@ because OCR pipelines are unforgiving when cleaning silently changes."""
 
 import pytest
 
-from horcrux.cleansing import cleanse_pages, cleanse_text
+from horcrux.corpus.cleansing import cleanse_pages, cleanse_text
 from horcrux.models import RawPage
 
 pytestmark = pytest.mark.unit

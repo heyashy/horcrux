@@ -21,9 +21,9 @@ from rich.panel import Panel
 from rich.rule import Rule
 
 from horcrux.agents import synthesise
-from horcrux.ingest import get_client
 from horcrux.models import Finding, ScoredCandidate
-from horcrux.retrieval_graph import hybrid_search
+from horcrux.retrieval.graph import hybrid_search
+from horcrux.retrieval.store import get_client
 
 warnings.filterwarnings("ignore", category=UserWarning, module="qdrant_client")
 

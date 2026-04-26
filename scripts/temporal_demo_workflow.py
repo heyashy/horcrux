@@ -15,7 +15,6 @@ from datetime import timedelta
 from temporalio import activity, workflow
 from temporalio.common import RetryPolicy
 
-
 # ── Activity ──────────────────────────────────────────────────────
 # Activities are where side-effectful, non-deterministic work lives.
 # They CAN use the wall clock, random, file I/O. Their results are

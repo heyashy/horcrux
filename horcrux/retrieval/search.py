@@ -36,10 +36,10 @@ from typing import Literal
 from qdrant_client import QdrantClient
 from qdrant_client.models import FieldCondition, Filter, MatchAny
 
-from horcrux.bm25 import BM25Index, get_chapter_index, get_paragraph_index
 from horcrux.config import settings
-from horcrux.embedding import encode_query
+from horcrux.corpus.embedding import encode_query
 from horcrux.models import ScoredCandidate
+from horcrux.retrieval.bm25 import BM25Index, get_chapter_index, get_paragraph_index
 
 _Source = Literal["chapter", "paragraph"]
 

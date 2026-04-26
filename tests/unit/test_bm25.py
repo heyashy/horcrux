@@ -2,8 +2,8 @@
 
 import pytest
 
-from horcrux.bm25 import BM25Index, _tokenize
 from horcrux.models import ChapterChunk
+from horcrux.retrieval.bm25 import BM25Index, _tokenize
 
 pytestmark = pytest.mark.unit
 

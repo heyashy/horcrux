@@ -4,7 +4,7 @@ import uuid
 
 import pytest
 
-from horcrux.conversation import ChatSession, Turn
+from horcrux.chat.session import ChatSession, Turn
 from horcrux.models import Finding, ScoredCandidate
 
 pytestmark = pytest.mark.unit

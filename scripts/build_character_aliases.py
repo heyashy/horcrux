@@ -26,8 +26,8 @@ from rich.console import Console
 from rich.table import Table
 from spacy.language import Language
 
-from horcrux.chapters import load_chapters_json
-from horcrux.characters import (
+from horcrux.corpus.chapters import load_chapters_json
+from horcrux.corpus.characters import (
     apply_overrides,
     claim_single_word_clusters,
     cluster_aliases,

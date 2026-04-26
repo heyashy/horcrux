@@ -44,16 +44,21 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from qdrant_client import QdrantClient
 
-from horcrux.ingest import get_client
 from horcrux.models import ScoredCandidate
-from horcrux.query_rewrite import correct_query
-from horcrux.retrieval import (
+
+# NOTE: import siblings via submodule paths, not via `horcrux.retrieval`.
+# The package's __init__.py re-exports from this module among others, so
+# importing `from horcrux.retrieval import ...` here would create a
+# circular import on first load.
+from horcrux.retrieval.query_rewrite import correct_query
+from horcrux.retrieval.search import (
     reciprocal_rank_fusion,
     search_chapters,
     search_chapters_bm25,
     search_paragraphs,
     search_paragraphs_bm25,
 )
+from horcrux.retrieval.store import get_client
 
 
 class RetrievalState(TypedDict, total=False):

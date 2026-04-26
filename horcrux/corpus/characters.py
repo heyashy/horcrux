@@ -24,7 +24,7 @@ See ADR-0006.
 
 import re
 from collections import Counter, defaultdict
-from typing import Iterable
+from collections.abc import Iterable
 
 from rapidfuzz import fuzz
 from spacy.language import Language
