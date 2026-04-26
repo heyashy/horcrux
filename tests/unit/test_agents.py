@@ -105,12 +105,22 @@ def test_truncate_chapter_short_passes_through():
 # ── _format_context ──────────────────────────────────────────────
 
 
-def test_format_context_includes_each_id():
+def test_format_context_does_not_leak_uuids():
+    """UUIDs are never shown to the model — citations are by passage
+    number to avoid transcription errors on long alphanumeric strings."""
     cands = [_candidate("id-1"), _candidate("id-2"), _candidate("id-3")]
     rendered = _format_context(cands)
-    assert "id=id-1" in rendered
-    assert "id=id-2" in rendered
-    assert "id=id-3" in rendered
+    assert "id-1" not in rendered
+    assert "id-2" not in rendered
+    assert "id-3" not in rendered
+
+
+def test_format_context_uses_numbered_brackets():
+    cands = [_candidate("a"), _candidate("b"), _candidate("c")]
+    rendered = _format_context(cands)
+    assert "[1]" in rendered
+    assert "[2]" in rendered
+    assert "[3]" in rendered
 
 
 def test_format_context_numbers_passages_in_order():
@@ -129,27 +139,46 @@ async def test_synthesise_rejects_empty_candidates():
 
 
 async def test_synthesise_rejects_fabricated_source_id():
-    """The runtime layer: if the agent returns IDs not in the candidate
-    set, we raise rather than trust the citation."""
+    """The runtime layer: if the agent returns a passage number that's
+    out of range, we raise rather than trust the citation."""
     cands = [_candidate("real-id")]
     fake_finding = Finding(
         answer="x",
-        source_ids=["real-id", "FABRICATED"],
+        source_ids=["1", "99"],  # 99 is out of range for 1-candidate set
         conviction=4,
     )
     test_model = TestModel(custom_output_args=fake_finding)
 
     agent = agents._synthesis_agent()
     with agent.override(model=test_model):  # noqa: SIM117
-        with pytest.raises(ValueError, match="not in candidate set"):
+        with pytest.raises(ValueError, match="not in"):
             await synthesise("any question", cands)
 
 
-async def test_synthesise_accepts_subset_of_candidates():
-    """If the agent cites only some of the candidates, that's fine — the
-    runtime check only flags fabrication, not under-citation."""
+async def test_synthesise_rejects_non_numeric_source_id():
+    """The runtime layer: catches the model returning a UUID-like string
+    instead of a passage number — exactly the failure mode that motivated
+    switching to numbered citations."""
+    cands = [_candidate("real-id")]
+    fake_finding = Finding(
+        answer="x",
+        source_ids=["real-id"],  # the model accidentally returned the UUID
+        conviction=4,
+    )
+    test_model = TestModel(custom_output_args=fake_finding)
+
+    agent = agents._synthesis_agent()
+    with agent.override(model=test_model):  # noqa: SIM117
+        with pytest.raises(ValueError, match="not in"):
+            await synthesise("any question", cands)
+
+
+async def test_synthesise_translates_numbers_to_real_ids():
+    """Agent returns passage numbers; wrapper translates them back to
+    actual chunk IDs so downstream consumers (renderer, history) get
+    the canonical IDs they need."""
     cands = [_candidate("id-1"), _candidate("id-2"), _candidate("id-3")]
-    finding = Finding(answer="x", source_ids=["id-2"], conviction=4)
+    finding = Finding(answer="x", source_ids=["2"], conviction=4)
     test_model = TestModel(custom_output_args=finding)
 
     agent = agents._synthesis_agent()
@@ -158,11 +187,24 @@ async def test_synthesise_accepts_subset_of_candidates():
     assert out.source_ids == ["id-2"]
 
 
+async def test_synthesise_handles_bracketed_citation_form():
+    """Sonnet usually returns bare digits but occasionally wraps them in
+    brackets (e.g. '[1]'). The wrapper strips brackets before parsing."""
+    cands = [_candidate("only-id")]
+    finding = Finding(answer="x", source_ids=["[1]"], conviction=4)
+    test_model = TestModel(custom_output_args=finding)
+
+    agent = agents._synthesis_agent()
+    with agent.override(model=test_model):
+        out = await synthesise("any question", cands)
+    assert out.source_ids == ["only-id"]
+
+
 async def test_synthesise_passes_through_valid_finding():
     cands = [_candidate("id-1")]
     finding = Finding(
         answer="The wand chooses the wizard.",
-        source_ids=["id-1"],
+        source_ids=["1"],
         conviction=5,
         gaps=[],
     )
@@ -172,4 +214,5 @@ async def test_synthesise_passes_through_valid_finding():
     with agent.override(model=test_model):
         out = await synthesise("Why does Ollivander say that?", cands)
     assert out.answer == "The wand chooses the wizard."
+    assert out.source_ids == ["id-1"]
     assert out.conviction == 5

@@ -80,9 +80,13 @@ a low conviction. Do not pad the answer with parametric guesses.
 in `source_ids`.
 
 CITATIONS:
-- `source_ids` must use the exact ID strings shown in the numbered context \
-(the bracketed UUIDs at the start of each passage). Never invent IDs.
+- `source_ids` is a list of the passage NUMBERS that support your answer, \
+as strings. Each passage in the context is prefixed with `[N]` where N is \
+its number — use exactly that number (without the brackets). Example: if \
+passages [1] and [3] support your answer, return `source_ids=["1", "3"]`.
 - Cite every passage that supports the answer, not just the first one.
+- Never invent passage numbers. Only cite numbers that appear in the \
+provided context.
 
 CONVICTION RUBRIC (1-5, pick the lower number when uncertain):
 - 5: Unambiguous direct evidence. The passages literally state the answer.
@@ -150,20 +154,62 @@ def _truncate_for_synthesis(candidate: ScoredCandidate) -> str:
 def _format_context(candidates: list[ScoredCandidate]) -> str:
     """Render candidates as a numbered context block for the agent.
 
-    Each entry includes the ID (so the model can cite it), location
-    (book/chapter/title/page for human-readable trace), and the text.
+    Each entry shows its passage number ([1], [2], ...) and location
+    (book/chapter/title/page). UUIDs are *not* shown — the model cites
+    by number, and `synthesise_with_history` translates numbers back to
+    real chunk IDs after the agent returns. Asking the model to copy a
+    36-character UUID character-by-character produces transcription
+    errors; numbers don't.
+
     Chapter-source chunks are truncated to a head snippet; paragraph
     chunks pass through whole. See `_truncate_for_synthesis`.
     """
     lines = []
     for i, c in enumerate(candidates, start=1):
         lines.append(
-            f"[{i}] id={c.id}\n"
-            f"    Book {c.book_num}, Chapter {c.chapter_num}: {c.chapter_title} "
+            f"[{i}] Book {c.book_num}, Chapter {c.chapter_num}: {c.chapter_title} "
             f"(p.{c.page_start}, source={c.source})\n"
             f"    {_truncate_for_synthesis(c)}"
         )
     return "\n\n".join(lines)
+
+
+def _resolve_citations(
+    raw_ids: list[str], candidates: list[ScoredCandidate]
+) -> list[str]:
+    """Translate model-returned passage numbers (`["1", "3"]`) to real
+    chunk IDs.
+
+    Accepts either bare digits (`"1"`) or bracketed forms (`"[1]"`) —
+    Sonnet usually returns bare digits but the schema field is `str`,
+    so anything is possible. Strips brackets and surrounding whitespace
+    before parsing.
+
+    Raises ValueError on out-of-range or non-numeric citations — that's
+    the runtime layer of strict-RAG. Caller surfaces the error so the
+    user sees the failure rather than getting a confidently-wrong
+    answer with broken links.
+    """
+    resolved: list[str] = []
+    invalid: list[str] = []
+    for raw in raw_ids:
+        cleaned = raw.strip().lstrip("[").rstrip("]").strip()
+        try:
+            idx = int(cleaned)
+        except ValueError:
+            invalid.append(raw)
+            continue
+        if not 1 <= idx <= len(candidates):
+            invalid.append(raw)
+            continue
+        resolved.append(candidates[idx - 1].id)
+    if invalid:
+        raise ValueError(
+            f"Agent returned passage numbers not in [1..{len(candidates)}]: "
+            f"{invalid}. Sonnet sometimes hallucinates citations under load — "
+            "rerun the query, or simplify it."
+        )
+    return resolved
 
 
 async def synthesise(query: str, candidates: list[ScoredCandidate]) -> Finding:
@@ -204,7 +250,6 @@ async def synthesise_with_history(
     if not candidates:
         raise ValueError("synthesise requires at least one candidate")
 
-    valid_ids = {c.id for c in candidates}
     prompt = (
         f"Question: {query}\n\n"
         f"Numbered passages:\n\n{_format_context(candidates)}"
@@ -214,10 +259,10 @@ async def synthesise_with_history(
     result = await agent.run(prompt, message_history=message_history)
     finding = result.output
 
-    invalid = [sid for sid in finding.source_ids if sid not in valid_ids]
-    if invalid:
-        raise ValueError(
-            f"Agent returned source_ids not in candidate set: {invalid}. "
-            f"Valid IDs were: {sorted(valid_ids)}"
-        )
+    # Translate the agent's passage-number citations into real chunk IDs.
+    # `_resolve_citations` raises on out-of-range or non-numeric values —
+    # that's the runtime layer of strict-RAG enforcement.
+    finding = finding.model_copy(
+        update={"source_ids": _resolve_citations(finding.source_ids, candidates)}
+    )
     return finding, result.all_messages()
