@@ -94,13 +94,16 @@ async def _amain() -> None:
         )
 
     client = get_client()
-    hits = await hybrid_search(
+    result = await hybrid_search(
         client,
         args.query,
         top_k=args.top_k,
         character_filter=character_filter or None,
     )
-    _render(console, args.query, hits)
+    if result.corrections:
+        pairs = ", ".join(f"{o!r}→{n!r}" for o, n in result.corrections)
+        console.print(f"[yellow]did you mean:[/] {pairs}")
+    _render(console, result.query, result.candidates)
 
 
 def main() -> None:

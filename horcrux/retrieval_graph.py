@@ -1,16 +1,16 @@
 """LangGraph state machine for hybrid retrieval.
 
-Four parallel retrievers (paragraph-dense, chapter-dense, paragraph-bm25,
-chapter-bm25) fan out from START, run concurrently, and converge on a
-`fuse` node that RRF-merges their ranked lists.
+A `rewrite` node runs first to fuzzy-correct typos in the query against
+the corpus vocabulary. Then four parallel retrievers (paragraph-dense,
+chapter-dense, paragraph-bm25, chapter-bm25) fan out, run concurrently,
+and converge on a `fuse` node that RRF-merges their ranked lists.
 
-    START
-      ├── paragraph_dense ──┐
-      ├── chapter_dense    ─┤
-      ├── paragraph_bm25   ─┤
-      └── chapter_bm25     ─┘
-                             ↓
-                           fuse  →  END
+    START → rewrite ──┬── paragraph_dense ──┐
+                      ├── chapter_dense    ─┤
+                      ├── paragraph_bm25   ─┤
+                      └── chapter_bm25     ─┘
+                                             ↓
+                                           fuse  →  END
 
 This shape suits LangGraph because:
 
@@ -36,6 +36,7 @@ with the user's query. Existing callers (`scripts/search.py`,
 """
 
 import asyncio
+from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import TypedDict
 
@@ -45,6 +46,7 @@ from qdrant_client import QdrantClient
 
 from horcrux.ingest import get_client
 from horcrux.models import ScoredCandidate
+from horcrux.query_rewrite import correct_query
 from horcrux.retrieval import (
     reciprocal_rank_fusion,
     search_chapters,
@@ -62,12 +64,19 @@ class RetrievalState(TypedDict, total=False):
     (paragraph_dense / chapter_dense / paragraph_bm25 / chapter_bm25);
     fuse reads the four and writes `fused`.
 
+    `query` is the (possibly-rewritten) text the retrievers see;
+    `original_query` is what the user typed verbatim. `corrections`
+    captures the (typo, fix) pairs the rewriter applied — surfaced in
+    the CLI as a "did you mean…" note.
+
     The k-knobs are all in state rather than closure — keeps the graph
     invocations explicit and lets callers tune per-query without
     rebuilding the graph.
     """
 
     query: str
+    original_query: str
+    corrections: list[tuple[str, str]]
     character_filter: list[str] | None
     paragraph_k: int
     chapter_k: int
@@ -114,6 +123,22 @@ def _chapter_dense_node(client: QdrantClient):
     return node
 
 
+def _rewrite_node(state: RetrievalState) -> dict:
+    """Fuzzy-correct typos in the query against the corpus vocabulary.
+
+    Pure, deterministic, ~milliseconds. Updates `query` to the corrected
+    form (so all downstream retrievers see the fixed version) and stores
+    the original alongside for display.
+    """
+    original = state["query"]
+    corrected, corrections = correct_query(original)
+    return {
+        "original_query": original,
+        "query": corrected,
+        "corrections": corrections,
+    }
+
+
 async def _paragraph_bm25_node(state: RetrievalState) -> dict:
     hits = await asyncio.to_thread(
         search_paragraphs_bm25,
@@ -158,15 +183,17 @@ def build_retrieval_graph(client: QdrantClient) -> CompiledStateGraph:
     """
     graph = StateGraph(RetrievalState)
 
+    graph.add_node("rewrite", _rewrite_node)
     graph.add_node("paragraph_dense", _paragraph_dense_node(client))
     graph.add_node("chapter_dense", _chapter_dense_node(client))
     graph.add_node("paragraph_bm25", _paragraph_bm25_node)
     graph.add_node("chapter_bm25", _chapter_bm25_node)
     graph.add_node("fuse", _fuse_node)
 
-    # Fan-out: START to all four retrievers in parallel.
+    # rewrite runs first; fan-out from there to all four retrievers.
+    graph.add_edge(START, "rewrite")
     for name in ("paragraph_dense", "chapter_dense", "paragraph_bm25", "chapter_bm25"):
-        graph.add_edge(START, name)
+        graph.add_edge("rewrite", name)
         graph.add_edge(name, "fuse")
     graph.add_edge("fuse", END)
 
@@ -185,6 +212,38 @@ def _compiled_graph() -> CompiledStateGraph:
 # ── Public API ───────────────────────────────────────────────────
 
 
+@dataclass(slots=True)
+class RetrievalResult:
+    """Output of `hybrid_search`. Carries the fused candidates plus the
+    rewriter's view of what happened to the query.
+
+    Why a dataclass and not a bare list: the rewriter's corrections are
+    user-facing context (CLI shows "did you mean…"). Returning a list
+    would force every caller to either re-run the rewriter or peek into
+    graph state. A small typed result keeps the API self-describing.
+    """
+
+    candidates: list[ScoredCandidate]
+    query: str
+    """The query as the retrievers actually saw it (post-rewrite)."""
+    original_query: str
+    """The query as the user typed it (pre-rewrite)."""
+    corrections: list[tuple[str, str]] = field(default_factory=list)
+    """`(typo, replacement)` pairs the rewriter applied. Empty if no
+    corrections were needed."""
+
+    def __iter__(self):
+        """Iterate over candidates so existing callers that did
+        `for c in hybrid_search(...)` keep working."""
+        return iter(self.candidates)
+
+    def __len__(self) -> int:
+        return len(self.candidates)
+
+    def __bool__(self) -> bool:
+        return bool(self.candidates)
+
+
 async def hybrid_search(  # noqa: PLR0913 — query + three k-knobs + filter are all distinct concerns
     client: QdrantClient | None = None,
     query: str = "",
@@ -193,14 +252,11 @@ async def hybrid_search(  # noqa: PLR0913 — query + three k-knobs + filter are
     chapter_k: int = 5,
     top_k: int = 10,
     character_filter: list[str] | None = None,
-) -> list[ScoredCandidate]:
+) -> RetrievalResult:
     """Retrieve from all four sources in parallel and fuse via RRF.
 
-    `client` is accepted for backward compatibility with the previous
-    Qdrant-only `hybrid_search` signature; if omitted, the cached
-    process-level compiled graph is used. Passing a client forces a
-    fresh graph build — useful for tests and for swapping settings at
-    runtime.
+    `client` is accepted for tests and runtime override; if omitted, the
+    cached process-level compiled graph is used.
 
     Defaults are skewed toward paragraphs (paragraph_k=20, chapter_k=5)
     because paragraphs carry the precise evidence; chapters contribute
@@ -218,4 +274,9 @@ async def hybrid_search(  # noqa: PLR0913 — query + three k-knobs + filter are
         "top_k": top_k,
     }
     final = await graph.ainvoke(state)
-    return final["fused"]
+    return RetrievalResult(
+        candidates=final["fused"],
+        query=final.get("query", query),
+        original_query=final.get("original_query", query),
+        corrections=final.get("corrections", []),
+    )

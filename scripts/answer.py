@@ -119,19 +119,25 @@ async def _amain() -> None:
     client = get_client()
 
     console.print("[dim]retrieving…[/]")
-    candidates = await hybrid_search(
+    result = await hybrid_search(
         client,
         args.query,
         top_k=args.top_k,
         character_filter=character_filter or None,
     )
-    if not candidates:
+    if not result.candidates:
         console.print("[yellow]no candidates retrieved — nothing to synthesise[/]")
         return
 
-    console.print(f"[dim]retrieved {len(candidates)} candidates; synthesising…[/]")
-    finding = await synthesise(args.query, candidates)
-    _render(console, args.query, finding, candidates)
+    if result.corrections:
+        pairs = ", ".join(f"{o!r}→{n!r}" for o, n in result.corrections)
+        console.print(f"[yellow]did you mean:[/] {pairs}")
+
+    console.print(
+        f"[dim]retrieved {len(result.candidates)} candidates; synthesising…[/]"
+    )
+    finding = await synthesise(result.query, result.candidates)
+    _render(console, result.query, finding, result.candidates)
 
 
 def main() -> None:

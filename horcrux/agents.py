@@ -167,12 +167,39 @@ def _format_context(candidates: list[ScoredCandidate]) -> str:
 
 
 async def synthesise(query: str, candidates: list[ScoredCandidate]) -> Finding:
-    """Run the synthesis agent and verify its citations.
+    """Run the synthesis agent and verify its citations. One-shot, no
+    conversational context — for `make answer` and similar single-query
+    flows.
 
     Raises:
         ValueError: if no candidates supplied (cannot synthesise from
             nothing) OR if the agent returns a source_id that isn't in
             the candidate set (the runtime layer of strict-RAG).
+    """
+    finding, _ = await synthesise_with_history(query, candidates, message_history=None)
+    return finding
+
+
+async def synthesise_with_history(
+    query: str,
+    candidates: list[ScoredCandidate],
+    *,
+    message_history: list | None = None,
+) -> tuple[Finding, list]:
+    """Synthesis variant that threads conversational context.
+
+    Pass the running message log from the previous turn as
+    `message_history`; receive back the new message log to feed into
+    the next turn. PydanticAI handles the role/content assembly — we
+    only carry the opaque list around.
+
+    The strict-RAG invariants apply identically: empty `source_ids` is
+    a schema violation (PydanticAI auto-retries), and the runtime check
+    rejects fabricated citations.
+
+    Returns a `(Finding, all_messages)` tuple. The messages include the
+    system prompt, every prior user/assistant turn, and the new turn —
+    pass it back unmodified next call.
     """
     if not candidates:
         raise ValueError("synthesise requires at least one candidate")
@@ -184,7 +211,7 @@ async def synthesise(query: str, candidates: list[ScoredCandidate]) -> Finding:
     )
 
     agent = _synthesis_agent()
-    result = await agent.run(prompt)
+    result = await agent.run(prompt, message_history=message_history)
     finding = result.output
 
     invalid = [sid for sid in finding.source_ids if sid not in valid_ids]
@@ -193,4 +220,4 @@ async def synthesise(query: str, candidates: list[ScoredCandidate]) -> Finding:
             f"Agent returned source_ids not in candidate set: {invalid}. "
             f"Valid IDs were: {sorted(valid_ids)}"
         )
-    return finding
+    return finding, result.all_messages()
