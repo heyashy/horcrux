@@ -280,6 +280,65 @@ read the output, identify the root cause, write the fix, verify the
 specific failing case now passes. **The agents accelerated each step;
 the measurement loop kept the work correct.**
 
+### What the acceleration actually looked like
+
+Concrete output across roughly four working days:
+
+| | Shipped |
+|---|---|
+| LLM-augmented modules | 9 (corpus / retrieval / agents / research / chat) |
+| ADRs (full structure) | 9 with context + alternatives + rollback |
+| Findings (root cause + lesson) | 22+ |
+| Unit tests | 203 |
+| Working CLI modes | 3 (answer / chat / research) |
+| Live infrastructure | Temporal ingest + Qdrant + LiteLLM proxy |
+| Commits | 23, each one coherent |
+| Lines of Python | ~4,300 across `horcrux/` (excludes scripts/ and tests/) |
+
+A solo engineer building the same scope without AI assistance is
+realistically 4–6 weeks of focused work. A solo engineer with an AI
+that *just types fast* would be quicker but ship without the
+documentation — typical AI demos. The combination here — agent speed
+plus the discipline embedded in CLAUDE.md (ADRs, findings, TDD,
+phase-by-phase verification) — is what made a long weekend land in
+roughly the same place a multi-week sprint would.
+
+The compounding effect matters more than raw speed. Most documentation
+gets deferred under time pressure: ADRs become "I'll write it later",
+findings become tribal knowledge, change logs go unwritten. Here the
+agent kept docs in lockstep with code because every task's definition
+of done *included* the doc. The meta-acceleration isn't shipping
+faster — it's shipping *with the documentation that makes future
+change cheap*.
+
+Three concrete examples of work that wouldn't have happened solo
+under the same time pressure:
+
+- **The subpackage refactor.** Flat 17-module package became five
+  concern-grouped subpackages. Solo, this is the kind of thing that
+  accumulates as months of debt; here it was a 30-minute commit
+  because the mechanical part (49 file moves, ~50 import rewrites)
+  is exactly what agents do well, and the test suite verified zero
+  regression instantly.
+- **ADR-0008 (Qdrant for the lab, OpenSearch for production).**
+  Triggered by a single user question. Required reflective work —
+  comparing Qdrant against OpenSearch, Pinecone, pgvector,
+  weighing managed vs self-hosted, naming the production-side
+  trade-off honestly. Solo, this is the kind of decision that gets
+  defaulted ("we used Qdrant because the tutorial did") rather
+  than reflected on.
+- **Findings 19–22.** Surfaced from end-to-end testing of the
+  research mode. Each took 10–20 minutes to document but represents
+  hours of investigation distilled. Solo AI demos almost universally
+  skip the postmortem step. Here it was structurally part of the
+  loop, so the catalog grew as the system did.
+
+The number that matters most isn't speed. It's that **22+ findings
+exist** — each one a place where the system silently fails, with the
+root cause named and the lesson captured. That document doesn't exist
+for most production RAG systems. Here it does, because the AI-augmented
+workflow made writing it cheap enough to actually do.
+
 ### What this lab demonstrates about AI-augmented engineering
 
 Three claims, in order of importance:
