@@ -9,6 +9,7 @@ Lazily loaded — model load is ~1.3GB and several seconds; defer until
 first call so import-time is fast.
 """
 
+import threading
 from collections.abc import Iterable
 
 import numpy as np
@@ -18,14 +19,24 @@ from horcrux.models import ChapterChunk
 
 _MODEL = None
 
+# Double-checked-locking guard around model construction. `lru_cache`
+# alone is not enough: when N threads concurrently enter `_get_model`
+# before the cache is warm, all N execute the body and each constructs
+# its own SentenceTransformer (1.3GB GPU allocation per thread). Research-mode
+# fans out multiple sub-queries in parallel via asyncio.to_thread, so
+# this race is reachable. The lock ensures exactly one constructor runs.
+_MODEL_LOCK = threading.Lock()
+
 
 def _get_model():
-    """Lazy-load bge-large; cache."""
+    """Lazy-load bge-large; cache. Thread-safe under concurrent first-callers."""
     global _MODEL  # noqa: PLW0603 — module-level cache for the 1.3GB model
     if _MODEL is None:
-        from sentence_transformers import SentenceTransformer  # noqa: PLC0415 — defer heavy import
+        with _MODEL_LOCK:
+            if _MODEL is None:  # re-check under the lock
+                from sentence_transformers import SentenceTransformer  # noqa: PLC0415
 
-        _MODEL = SentenceTransformer(settings.embedding.model_name)
+                _MODEL = SentenceTransformer(settings.embedding.model_name)
     return _MODEL
 
 

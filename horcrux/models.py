@@ -145,6 +145,88 @@ class Finding(BaseModel):
     )
 
 
+# ── Phase 6 — research mode (multi-step planning + aggregation) ──
+
+
+class Plan(BaseModel):
+    """A research plan produced by the planner agent.
+
+    Decomposes a complex query into focused sub-questions. Each
+    sub-question is dispatched to its own retrieve+synthesise branch
+    in parallel via LangGraph's `Send`; the aggregator then merges the
+    sub-findings into a coherent final answer.
+
+    The cap is intentional. More than ~5 sub-queries dilutes the final
+    synthesis (too many overlapping findings to reconcile) and the
+    parallel cost grows linearly. The schema allows up to 8 for
+    headroom on rare deeply-multifaceted questions.
+    """
+
+    sub_questions: list[str] = Field(
+        min_length=1,
+        max_length=8,
+        description=(
+            "Focused sub-questions that decompose the original query. "
+            "Each should be answerable from a localised set of passages. "
+            "Aim for 3-5 sub-questions; use fewer if the question is "
+            "already focused."
+        ),
+    )
+    rationale: str = Field(
+        default="",
+        description=(
+            "Brief reasoning for why these sub-questions cover the original "
+            "query. Shown in the trace, not in the final answer."
+        ),
+    )
+
+
+class SubFinding(BaseModel):
+    """One sub-question's worth of work.
+
+    Captures the question, the synthesis output for it, and the candidate
+    set that was retrieved. Persisted in `ResearchReport.sub_findings` so
+    the trace command can re-render the per-sub-query reasoning long after
+    the live run is over.
+    """
+
+    sub_question: str
+    finding: Finding
+    candidates: list[ScoredCandidate]
+
+
+class ResearchReport(BaseModel):
+    """The output of a research-mode (multi-step planning) query.
+
+    Carries the entire reasoning chain — the plan, every sub-finding, and
+    the aggregator's final answer — as one typed value. The CLI's `/trace`
+    command reads this directly to re-render how the system arrived at
+    the answer; persistence (when added) just means writing this dataclass
+    to disk.
+
+    `source_ids` aggregates citations across all sub-findings that the
+    final answer references. The aggregator is responsible for keeping
+    this list non-empty (strict-RAG also applies at the aggregate layer).
+    """
+
+    query: str = Field(description="The query as the retrievers saw it (post-rewrite).")
+    original_query: str = Field(description="What the user typed.")
+    plan: Plan
+    sub_findings: list[SubFinding]
+    answer: str = Field(
+        description=(
+            "Final coherent answer, synthesised across all sub-findings. "
+            "Plain prose, no markdown."
+        ),
+    )
+    source_ids: list[str] = Field(
+        min_length=1,
+        description="Unique citations referenced in the final answer.",
+    )
+    conviction: int = Field(ge=1, le=5)
+    gaps: list[str] = Field(default_factory=list)
+
+
 # ── Helpers ──────────────────────────────────────────────────────
 
 # Fixed namespace UUID for chunk ID derivation. Arbitrary but stable —
