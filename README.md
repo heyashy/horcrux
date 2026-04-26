@@ -182,115 +182,129 @@ Architecture decisions: [`docs/adr/`](docs/adr/).
 
 ## How it was built
 
-Honest framing: this lab was built collaboratively with AI coding agents
-(Claude Code, Opus 4.7) over a series of focused sessions. The agents
-didn't replace engineering rigor — **the rigor is what made the agent
-collaboration productive**.
+This lab was built collaboratively with AI coding agents (Claude Code,
+Opus 4.7) over a series of focused sessions. **The agents didn't replace
+engineering rigor — the rigor is what made the agent collaboration
+productive.** This section is honest about what that actually looked
+like, because most write-ups of AI-built software either pretend the
+human wasn't involved or pretend the AI wasn't.
 
-### What that looked like in practice
+### The dev cycle, concretely
 
-- **Phase-by-phase, with verification at each layer.** Phase 4
-  (retrieval) was built and verified standalone before Phase 5
-  (synthesis) wired LLMs on top. Within Phase 5, the dense path was
-  verified before BM25 was added. Within research mode, a stub planner
-  + stub aggregator validated the streaming UX before the real Haiku /
-  Sonnet agents replaced them. Every layer is debuggable in isolation.
+Each phase of the lab followed the same rhythm:
 
-- **ADRs for non-trivial decisions.** Nine ADRs in
-  [`docs/adr/pending/`](docs/adr/pending/), each captured in the same
-  structured form (context / decision / alternatives considered /
-  consequences / rollback). Examples: why Temporal *and* LangGraph
-  (different failure profiles), why LiteLLM proxy (one-line model
-  swaps), why Qdrant for this lab but OpenSearch for production, why
-  `Send` for research mode but `asyncio.gather` for retrieval.
+```
+1. Brainstorm out loud           → human + agent agree on shape
+2. ADR if non-trivial             → docs/adr/pending/ADR-XXXX.md
+3. Tests-first where it adds signal  → unit tests for pure functions
+4. Skeleton with stubs            → wire the topology, no real LLMs yet
+5. Live verification              → run end-to-end, eyeball output
+6. Replace stubs with real logic  → agents, retrievers, etc.
+7. Findings if surprises          → docs/lab/findings.md, append
+8. Commit + push                  → one coherent step per commit
+```
 
-- **A findings catalog as a living artefact.**
-  [`docs/lab/findings.md`](docs/lab/findings.md) — 22+ entries, each
-  in the same Symptom / Root cause / Fix / Lesson template. Documents
-  the cases where my hypothesis was *wrong* and the agent or the live
-  test corrected me, alongside the cases where the agent's first
-  attempt was wrong and human review caught it. The catalog is itself
-  evidence of how the collaboration worked: not "AI wrote this," but
-  "AI and human iterated, with empirical evidence settling
-  disagreements."
-
-- **TDD where it adds signal.** Pure functions (chunking thresholds,
-  RRF fusion, fuzzy matching, schema invariants) got tests-first.
-  Glue code (wiring an agent into a graph) skipped TDD where tests
-  would just mirror the wiring. Test count: 203, broken across unit
-  / integration / smoke per the standard pyramid.
-
-- **Layer-by-layer commit cadence.** 21 commits over the lab's
-  lifetime; each is one coherent step (a phase, a hotfix, a refactor).
-  `git log --oneline` reads like a development diary. No giant
-  "initial commit." [Change log](docs/log/) records what shipped each
-  day.
-
-- **Specialised AI agents for specific roles.** Code-review agents for
-  reviewing diffs, exploration agents for navigating large codebases,
-  general-purpose agents for end-to-end implementation. The
-  multi-agent setup was used most in early phases (research +
-  exploration); later phases ran direct because the codebase shape
-  was clear.
+Most phases took 2–6 hours. The skeleton-first step was load-bearing:
+research mode shipped with a stub planner and stub aggregator first,
+which let the streaming UX be debugged in isolation before the real
+Haiku/Sonnet agents replaced the stubs. Every layer is independently
+debuggable because every layer was built that way deliberately.
 
 ### Where the agent helped most
 
-- **Mechanical refactors** (the subpackage reorganisation) — fast,
-  consistent, with full test coverage check at the end.
-- **Boilerplate-heavy modules** (Pydantic models, LangGraph state
-  machines, Rich rendering) — the patterns are stable; agents fill
-  them in correctly given clear specs.
-- **End-to-end verification** — agents are good at running smoke
-  tests, parsing output, surfacing problems.
-- **Documentation discipline** — once the ADR/findings template was
-  set, the agents kept it consistent.
+- **Mechanical refactors** — the subpackage reorganisation (49 files
+  moved with `git mv` to preserve blame, ~50 imports rewritten,
+  circular-import bug caught and fixed) took ~30 minutes with the
+  agent driving the rote work. Unit tests confirmed zero regression.
+- **Boilerplate-heavy modules** — Pydantic models, LangGraph state
+  machines, Rich rendering loops. The patterns are stable; agents
+  fill them in correctly given clear specs.
+- **End-to-end smoke verification** — running queries, parsing live
+  output, surfacing the specific failure modes that motivated the
+  next round of changes (the conjunctivitis-curse case → BM25;
+  the UUID transcription bug → numbered citations; the rate-limit
+  case → chapter-chunk truncation). The agent ran the experiment;
+  the human read the result.
+- **Doc discipline** — once one ADR was written in the standard
+  shape, every subsequent ADR matched it. Same for findings — the
+  Symptom/Root cause/Fix/Lesson template held across all 22+ entries
+  without prompting.
 
 ### Where the human still drove
 
-- **Architectural decisions.** Every ADR's "Decision" section is the
-  human's call after considering the alternatives the agent surfaced.
-  When the agent proposed using Qdrant native sparse vectors for the
-  BM25 layer, the human looked at corpus size and said "in-memory
-  rank-bm25 is the right call here" — and was correct.
+- **Architectural calls.** The agent surfaced alternatives well; the
+  human made the trade-off. Example: when adding BM25, the agent
+  proposed Qdrant native sparse vectors (the textbook fix). The human
+  said "the corpus is 17MB — an in-memory `rank-bm25` index is the
+  right call at this scale." The human was correct, and ADR-0008's
+  alternatives section now documents both paths.
 - **Catching parametric leakage.** The observation that the planner
-  was using HP knowledge to write sub-questions ("The Prince's Tale"
-  appearing as a sub-question name proves the planner *knew*
-  parametrically that this chapter exists) came from the human reading
-  the live output. The agent would have shipped without flagging it.
-  Documented as a known-good limitation in ADR-0009.
-- **Calibration judgement.** Whether the answer was "really" 5/5 or
-  "actually" 4/5 — the agent biased high; the human looked at evidence
-  and pushed for proper calibration. F20 documents the calibration
-  drift; the planner-aggregator architecture organically resolved it.
-- **Deciding when to stop.** Saying "this is complete; the next step
-  is weeks of optimisation" is a judgement call about scope, not a
-  technical question. The lab's discipline includes knowing when not
-  to keep building.
+  was leveraging Sonnet's training-time knowledge of HP to name
+  specific chapter titles ("The Prince's Tale") in its sub-questions
+  came from the human reading live output. The agent would have
+  shipped without flagging it. Documented as a known-good limitation
+  in ADR-0009.
+- **Calibration judgement.** The agent biased toward `conviction=5/5`.
+  The human looked at the actual evidence chain and pushed for
+  honest calibration. Finding 20 documents the drift; the planner-
+  aggregator architecture organically resolved it (each sub-finding
+  carries its own conviction; the aggregator is bounded by the
+  weakest, exactly the calibration pattern that was missing in
+  single-shot mode).
+- **Deciding when to stop.** "This is complete; the next step is
+  weeks of optimisation" is a scope call, not a technical one. The
+  lab's discipline includes knowing when not to keep building.
+
+### How the AI got things wrong
+
+Worth saying plainly. Examples directly from the findings catalog:
+
+- **Sonnet dropped two characters from a UUID** when transcribing it
+  into a citation. The runtime check (Layer 3 of strict-RAG) caught
+  the fabrication; the next session redesigned citations to use
+  passage *numbers* so the failure mode couldn't recur. Documented in
+  the [numbered-citations commit](https://github.com/heyashy/horcrux/commit/62fd676).
+- **Three parallel sub-queries each loaded their own copy of the
+  bge-large model** and OOM'd the GPU. Race condition in the lazy
+  loader; fixed with double-checked locking. Caught the first time
+  research mode ran end-to-end.
+- **Chapter chunks blew the rate limit** — they store full chapter
+  text (3-5k tokens), and a top-10 candidate set with two chapter
+  hits ran straight past Anthropic's 30k-tokens-per-minute cap. Fixed
+  by truncating chapter chunks to a 200-word head in the synthesis
+  prompt; surface benefit was cleaner citations because the model
+  could no longer mistake chapter chunks for fine-grained evidence.
+
+In each case, the loop that fixed it was the same: run the system,
+read the output, identify the root cause, write the fix, verify the
+specific failing case now passes. **The agents accelerated each step;
+the measurement loop kept the work correct.**
 
 ### What this lab demonstrates about AI-augmented engineering
 
-Three things, in order of importance:
+Three claims, in order of importance:
 
-1. **Discipline scales human-AI collaboration.** TDD, ADRs, typed
-   contracts, and a findings catalog gave the agents a structure to
-   work within. Without that, AI output would be unverified and
-   non-composable. With it, the agent shipped working code at a
-   consistent quality bar.
+1. **Discipline scales human-AI collaboration.** TDD on pure
+   functions, ADRs for non-trivial decisions, typed contracts at
+   every LLM boundary, and a findings catalog that records empirical
+   reality — these are what gave the agents a structure to work
+   within. Strip those out and AI output is unverified and
+   non-composable. Keep them, and a long weekend ships a system that
+   would otherwise take weeks.
 
-2. **Layered verification beats end-to-end faith.** When the
-   conjunctivitis-curse query failed, we didn't ask the model to "try
-   harder" — we identified that BM25 was needed (Finding 21), built
-   the in-memory index, fused it via LangGraph, and verified the
-   specific failing query now succeeded. Agents are great at
-   mechanical work; the *measurement loop* is what makes the work
-   correct.
+2. **Layered verification beats end-to-end faith.** When something
+   broke, we didn't ask the model to "try harder." We identified the
+   layer at fault (retrieval missing rare keywords → add BM25;
+   citation transcription failing → numbered citations; conviction
+   anchoring high → add planner+aggregator), built the fix at that
+   layer, and verified the specific failure case now passed. Agents
+   excel at executing the fix; humans pick where to fix.
 
-3. **The findings catalog is the lab's most valuable output.** Anyone
-   can clone an AI-built RAG and demo a happy path. Few have a
-   document explaining where their system silently fails and why.
-   That's what `docs/lab/findings.md` is — a record of every gotcha,
-   most of which were discovered the hard way (by running the system
-   and watching it produce a wrong answer).
+3. **The findings catalog is the lab's most valuable artefact.**
+   Anyone can clone an AI-built RAG and demo a happy path. Few have
+   22 documented failure modes, with root causes and lessons,
+   collected from running the system and watching it produce wrong
+   answers. That document is the portfolio piece.
 
 ---
 
