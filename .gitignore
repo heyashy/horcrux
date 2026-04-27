@@ -52,3 +52,9 @@ htmlcov/
 *.swp
 "Pasted image.png"
 Pasted*.png
+
+# ── Personal / off-repo artefacts ─────────────────────────────────
+# LinkedIn drafts and long-form pieces are kept locally for editing
+# but not pushed; the README is the public showcase surface.
+docs/lab/linkedin-post.md
+docs/lab/long-form-article.md
